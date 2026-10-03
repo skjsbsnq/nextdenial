@@ -1,0 +1,15 @@
+# 本地 SDK override 由开发者提供，禁止入库。
+pubspec_overrides.yaml
+.dart_tool/
+build/
+
+# 文档与任务卡一律不入库（README 除外）。
+docs/
+**/*.md
+!README.md
+!/README.md
+plugins/**/README.md
+
+# 本机工具/代理工作目录。
+.codebuddy/
+.pi/

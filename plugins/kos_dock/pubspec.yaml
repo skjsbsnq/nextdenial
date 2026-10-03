@@ -1,0 +1,39 @@
+name: kos_dock
+description: >-
+  KOS Dock (quickshell Dock port) as a Denial plugin.
+publish_to: none
+version: 0.0.0
+environment:
+  sdk: ^3.13.0
+  flutter: 3.47.5
+dependencies:
+  flutter:
+    sdk: flutter
+  flutter_localizations:
+    sdk: flutter
+  denial_sdk: '0.0.0'
+  denial_flutter_sdk: '0.0.0'
+  flutter_riverpod: ^3.4.3
+  flutter_svg: ^2.3.0
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  test: ^1.24.0
+
+flutter:
+  assets:
+    - assets/icons/
+
+denial_plugin:
+  schema: 1
+  name: KOS Dock
+  provides:
+    # 单个 ShellSurface：dock 悬浮层（kos_dock.dock，aboveWindows 层）。
+    # 预览卡/右键菜单走 OverlayPortal，不需要第二个 surface。
+    - contract: package:denial_flutter_sdk/surfaces.dart#ShellSurface
+      count: 1
+    # ShellWorkArea（zeroOrOne）：合并顶栏后底条承载 dock+工作区+状态簇，
+    # bottom 边预留让最大化窗口避开整段底条。
+    - contract: package:denial_flutter_sdk/surfaces.dart#ShellWorkArea
+      count: 1
