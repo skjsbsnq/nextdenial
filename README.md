@@ -7,7 +7,7 @@
 | 插件 | 说明 | 提供的 Surface |
 | --- | --- | --- |
 | `plugins/kos_deskcenter` | KOS DeskCenter 桌面小部件（时钟 / 天气 / 日历 / 待办 / 系统 / 活动 / 音乐），Dart 重写装箱布局与编辑模式 | `ShellSurface` ×2（desktop 容器 + desktopControls 面板宿主） |
-| `plugins/kos_dock` | KOS Dock：放大镜 Dock、预览卡、右键菜单、文件夹展开，并合并顶栏为底条 | `ShellSurface` ×1（aboveWindows）+ `ShellWorkArea` ×1 |
+| ~~`plugins/kos_dock`~~ | （已移除，待重新移植） | — |
 
 ## 设计原则
 
