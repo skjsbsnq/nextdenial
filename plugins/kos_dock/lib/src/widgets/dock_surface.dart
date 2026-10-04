@@ -121,7 +121,7 @@ final class DockEntry {
 /// feeds the TASK-01 magnifier with the pointer position and amplitude
 /// envelope. `build()` wraps it in services/Localizations/Theme like the
 /// taskbar does (`WindowsTaskbar.build`, taskbar.dart:24-61).
-class DockSurface extends StatelessWidget {
+class DockSurface extends StatefulWidget {
   const DockSurface({
     required this.entries,
     required this.services,
@@ -210,29 +210,49 @@ class DockSurface extends StatelessWidget {
   final void Function(String key)? onTogglePin;
 
   @override
-  Widget build(BuildContext context) {
+  State<DockSurface> createState() => _DockSurfaceState();
+}
+
+class _DockSurfaceState extends State<DockSurface> {
+  /// Seeded theme cached in [didChangeDependencies] — the magnification
+  /// envelope rebuilds the band every frame, and recomputing
+  /// `ColorScheme.fromSeed`/`ThemeData` per build was a measurable per-frame
+  /// allocation. Rebuilt only when the ambient `ShellTheme` changes.
+  ThemeData? _theme;
+  ShellThemeData? _themeSource;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     final shell = context.shellTheme;
-    final colors = ColorScheme.fromSeed(
-      seedColor: shell.accent,
-      brightness: shell.brightness,
-    );
+    if (!identical(shell, _themeSource) && shell != _themeSource) {
+      _themeSource = shell;
+      _theme = ThemeData(
+        useMaterial3: true,
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: shell.accent,
+          brightness: shell.brightness,
+        ),
+        splashFactory: NoSplash.splashFactory,
+        visualDensity: VisualDensity.compact,
+        tooltipTheme: const TooltipThemeData(
+          waitDuration: Duration(milliseconds: 600),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     // taskbar.dart:31-61 — services + Material localizations + seeded Theme
     // so buildApplicationIcon/tooltips/menus have a Theme context.
     return ShellServicesScope(
-      services: services,
+      services: widget.services,
       child: Localizations.override(
         context: context,
         delegates: GlobalMaterialLocalizations.delegates,
         child: Theme(
-          data: ThemeData(
-            useMaterial3: true,
-            colorScheme: colors,
-            splashFactory: NoSplash.splashFactory,
-            visualDensity: VisualDensity.compact,
-            tooltipTheme: const TooltipThemeData(
-              waitDuration: Duration(milliseconds: 600),
-            ),
-          ),
+          data: _theme ?? ThemeData(useMaterial3: true),
           child: LayoutBuilder(
             builder: (context, constraints) {
               // 全宽玻璃条与 dock 玻璃等高：resting 由同一 resting-pass
@@ -240,12 +260,14 @@ class DockSurface extends StatelessWidget {
               // 直接取 iconSize）。`layout()` 是纯函数，重复调用幂等。
               final axisLength = constraints.maxWidth;
               final avail = dockAvailableLength(axisLength);
-              final mag = magnificationEnabled ? magnification : 1.0;
-              final kinds = [for (final e in entries) e.kind];
-              final b = dockSectionBoundary(kinds, pinnedAppCount);
+              final mag = widget.magnificationEnabled
+                  ? widget.magnification
+                  : 1.0;
+              final kinds = [for (final e in widget.entries) e.kind];
+              final b = dockSectionBoundary(kinds, widget.pinnedAppCount);
               final strip = layout(
                 kinds: kinds,
-                preferredSize: iconSize,
+                preferredSize: widget.iconSize,
                 available: avail,
                 magnification: mag,
                 sectionSpacing: kDockSectionSpacing,
@@ -271,34 +293,34 @@ class DockSurface extends StatelessWidget {
                   // 中：dock 图标带（_DockBand 内部已按 bandLength 居中，
                   // 自带 _DockGlass 与全宽条同色同高融合）。
                   _DockBand(
-                    entries: entries,
-                    monitorId: monitorId,
-                    iconSize: iconSize,
-                    magnification: magnification,
-                    magnificationEnabled: magnificationEnabled,
-                    pinnedAppCount: pinnedAppCount,
+                    entries: widget.entries,
+                    monitorId: widget.monitorId,
+                    iconSize: widget.iconSize,
+                    magnification: widget.magnification,
+                    magnificationEnabled: widget.magnificationEnabled,
+                    pinnedAppCount: widget.pinnedAppCount,
                     // 有整条玻璃（statusBarBuilder 非空）时不再画 band 自带
                     // 的短玻璃，避免与 _DockStripGlass 叠成「两条」；
                     // statusBarBuilder==null（测试/独立使用）仍画默认玻璃。
-                    showGlass: statusBarBuilder == null,
-                    onItemHovered: onItemHovered,
-                    onItemHoverLeft: onItemHoverLeft,
-                    onItemPressStarted: onItemPressStarted,
-                    onItemActivated: onItemActivated,
-                    onItemContextRequested: onItemContextRequested,
-                    onItemDragMoved: onItemDragMoved,
-                    onItemDragReleased: onItemDragReleased,
-                    onItemDragCancelled: onItemDragCancelled,
-                    onItemReordered: onItemReordered,
-                    onTogglePin: onTogglePin,
+                    showGlass: widget.statusBarBuilder == null,
+                    onItemHovered: widget.onItemHovered,
+                    onItemHoverLeft: widget.onItemHoverLeft,
+                    onItemPressStarted: widget.onItemPressStarted,
+                    onItemActivated: widget.onItemActivated,
+                    onItemContextRequested: widget.onItemContextRequested,
+                    onItemDragMoved: widget.onItemDragMoved,
+                    onItemDragReleased: widget.onItemDragReleased,
+                    onItemDragCancelled: widget.onItemDragCancelled,
+                    onItemReordered: widget.onItemReordered,
+                    onTogglePin: widget.onTogglePin,
                   ),
-                  if (statusBarBuilder != null)
+                  if (widget.statusBarBuilder != null)
                     Positioned(
                       left: 0,
                       right: 0,
                       bottom: kDockEdgeOffset,
                       height: resting,
-                      child: statusBarBuilder!(context),
+                      child: widget.statusBarBuilder!(context),
                     ),
                 ],
               );
@@ -374,7 +396,13 @@ class _DockBandState extends State<_DockBand>
   /// is a scene/surface coordinate in the source (`scenePosition.x`,
   /// DockSurface.qml:169-170) and `dockPointerInBase` subtracts the same
   /// centering offset (:79-81).
-  double _pointerAxis = double.nan;
+  ///
+  /// 消毛刺（P0）：hover 每个 move 事件曾 `setState` 重建整棵 LayoutBuilder
+  /// 树（与 envelope 驱动叠加成双重 layout）。现在它只是驱动 wave 的
+  /// `Listenable.merge([_envelope, _pointerAxis])` 的一个输入：赋值即让
+  /// AnimatedBuilder 重算高斯波，不再触发整树 setState 重建；enter/move 只有
+  /// 在 |new-old| > 0.5 时才写值，亚像素微抖不再重算。
+  final ValueNotifier<double> _pointerAxis = ValueNotifier(double.nan);
 
   /// Surface-space x of the band's left edge from the last layout
   /// (`(axisLength - bandLength) / 2`, :766).
@@ -576,6 +604,7 @@ class _DockBandState extends State<_DockBand>
     _magnificationExit?.cancel();
     _scrollController.dispose();
     _envelope.dispose();
+    _pointerAxis.dispose();
     super.dispose();
   }
 
@@ -589,12 +618,25 @@ class _DockBandState extends State<_DockBand>
     }
   }
 
+  /// Writes [_pointerAxis] only when the surface-space axis moved more than
+  /// 0.5px — sub-pixel hover jitter no longer recomputes the wave. A NaN old
+  /// value (no pointer yet) always accepts the first finite sample.
+  void _updatePointerAxis(double localDx) {
+    final next = localDx + _bandLeft;
+    final old = _pointerAxis.value;
+    if ((next - old).abs() > 0.5 || (old.isNaN && next.isFinite)) {
+      _pointerAxis.value = next;
+    }
+  }
+
   void _onPointerEnter(PointerEnterEvent event) {
     // :167-172 — entering the interactive area stops the exit debounce and
     // activates magnification.
     _magnificationExit?.cancel(); // :171 magnificationExit.stop()
+    _updatePointerAxis(event.localPosition.dx);
+    // `_magnificationActive` gates `_directMagnification`, so it still goes
+    // through setState — pointerAxis itself never does.
     setState(() {
-      _pointerAxis = event.localPosition.dx + _bandLeft;
       _magnificationActive = true; // :172
     });
     _animateEnvelope(_magnificationRequested ? 1 : 0); // :97
@@ -603,8 +645,9 @@ class _DockBandState extends State<_DockBand>
   void _onPointerMove(PointerHoverEvent event) {
     // :699-704,:169-170 — pointerAxis follows the pointer while over the
     // interactive area; the band MouseRegion approximates that region (glass
-    // + icon pointerAreas, :141-165).
-    setState(() => _pointerAxis = event.localPosition.dx + _bandLeft);
+    // + icon pointerAreas, :141-165). The wave AnimatedBuilder consumes the
+    // change — no setState here.
+    _updatePointerAxis(event.localPosition.dx);
   }
 
   void _onPointerExit(PointerExitEvent event) {
@@ -659,21 +702,25 @@ class _DockBandState extends State<_DockBand>
           baseLayout.size,
           effectiveMagnification,
         ); // :120
-        final pointerInBase = dockPointerInBase(
-          pointerAxis: _pointerAxis,
-          axisLength: axisLength,
-          baseLength: baseLayout.baseLength,
-          availableLength: available,
-          scrollOffset: _scrollOffset,
-        ); // :79-81
         final reflow = _reduceMotion ? Duration.zero : kDockReflowDuration;
         // Slot/divider/band animations freeze during magnification
         // (:104, :778, :864, :1029).
         final slotAnim = _directMagnification ? Duration.zero : reflow;
 
         return AnimatedBuilder(
-          animation: _envelope,
+          // The wave recomputes on envelope frames *and* pointer-axis changes;
+          // hover moves only touch this subtree now, never the LayoutBuilder.
+          animation: Listenable.merge([_envelope, _pointerAxis]),
           builder: (context, _) {
+            // pointerInBase (:79-81) lives inside the wave builder so a
+            // hover move does not rebuild the outer LayoutBuilder subtree.
+            final pointerInBase = dockPointerInBase(
+              pointerAxis: _pointerAxis.value,
+              axisLength: axisLength,
+              baseLength: baseLayout.baseLength,
+              availableLength: available,
+              scrollOffset: _scrollOffset,
+            );
             // layout (:105-110): magnified pass recomputed every envelope
             // frame; preview reordering is a later card so kinds/order are
             // the raw model.
@@ -691,12 +738,11 @@ class _DockBandState extends State<_DockBand>
               available,
               waveLayout.length,
             ); // :119
-            // Cache the band's centered surface offset so the band-local
-            // MouseRegion positions below can be lifted into surface space
-            // (:766); layout is `directMagnification`-frozen while the wave
-            // is active, so this matches the rendered left whenever the
-            // pointer position is actually consumed.
-            _bandLeft = (axisLength - bandLength) / 2;
+            // 亚像素抖动（P0 像素对齐）：band 居中偏移与 slot/divider 一样在
+            // 渲染层取整——`layout()` 纯函数保持连续坐标，摆放坐标全部落到整
+            // 像素上，放大期不再有半像素横移。`_bandLeft` 与渲染的 left 必须
+            // 用同一个取整值，否则 hover 命中坐标系与图标位置系错开半像素。
+            _bandLeft = ((axisLength - bandLength) / 2).roundToDouble();
             return Stack(
               // :616 transparent surface; bounds anchor but never clip — the
               // band top may exceed the 78px surface strip (card 注意).
@@ -707,7 +753,7 @@ class _DockBandState extends State<_DockBand>
                 // on reflow (:777-783) and drop to zero duration while
                 // `directMagnification` (:778).
                 AnimatedPositioned(
-                  left: (axisLength - bandLength) / 2, // :766
+                  left: _bandLeft, // :766 — pixel-snapped above
                   bottom: kDockEdgeOffset, // :769
                   width: bandLength, // :767-768
                   height: bandThickness, // :765 — includes head-room
@@ -815,6 +861,17 @@ class _DockBandState extends State<_DockBand>
   }
 }
 
+/// 渲染层像素对齐（P0 消毛刺）：返回 [slot] 的副本，start/span 落到整像素，
+/// size 保持原值——图标视觉放大交给 `Transform.scale`（`DockItem` 内部），
+/// 槽位取整把 ±0.5px 的连续余量收进槽尾 gap 里，放大期不再有亚像素横移。
+/// `layout()` 纯函数不受影响（测试期望值不变）。
+DockSlot _snappedSlot(DockSlot slot) => DockSlot(
+  center: slot.center, // 基坐标系的命中判定坐标，不取整
+  start: slot.start.roundToDouble(),
+  span: slot.span.roundToDouble(),
+  size: slot.size,
+);
+
 /// Glass base material (:816-825): ShellBackdropBlur + cardColor Material,
 /// radius scaled by the shell roundness, outlineVariant@0.65 1px border —
 /// the denial-material port of `BlurService.backgroundColor(
@@ -839,20 +896,26 @@ class _DockGlass extends StatelessWidget {
       blur: shell.backdropBlurEnabled, // blur/glass on, off → flat fill
       separateChild: true, // taskbar.dart:165
       borderRadius: radius,
-      child: Material(
-        // cardColor: the widget-surface opacity (cardOpacity), matching the
-        // DeskCenter cards; glass mode resolves to the glass backing.
-        color: shell.cardColor(colors.surfaceContainer),
-        surfaceTintColor: Colors.transparent, // taskbar.dart:76 (M3 tint off)
-        shape: RoundedRectangleBorder(
-          borderRadius: radius,
-          // :824-825 — outlineVariant @ 0.65, width 1.
-          side: BorderSide(
-            color: colors.outlineVariant.withValues(alpha: 0.65),
+      // RepaintBoundary 只隔离玻璃填充（Material）——放大重排时 band 区域
+      // 的 repaint 不再拖累玻璃；`separateChild` 的 backdrop 层本身保持未
+      // 隔离（SDK 注释：separate-child glass 不能把 controls 关进 opacity/
+      // repaint group）。
+      child: RepaintBoundary(
+        child: Material(
+          // cardColor: the widget-surface opacity (cardOpacity), matching the
+          // DeskCenter cards; glass mode resolves to the glass backing.
+          color: shell.cardColor(colors.surfaceContainer),
+          surfaceTintColor: Colors.transparent, // taskbar.dart:76 (M3 tint off)
+          shape: RoundedRectangleBorder(
+            borderRadius: radius,
+            // :824-825 — outlineVariant @ 0.65, width 1.
+            side: BorderSide(
+              color: colors.outlineVariant.withValues(alpha: 0.65),
+            ),
           ),
+          clipBehavior: Clip.antiAlias,
+          child: const SizedBox.expand(),
         ),
-        clipBehavior: Clip.antiAlias,
-        child: const SizedBox.expand(),
       ),
     );
   }
@@ -878,17 +941,21 @@ class _DockStripGlass extends StatelessWidget {
       blur: shell.backdropBlurEnabled,
       separateChild: true,
       borderRadius: radius,
-      child: Material(
-        color: shell.cardColor(colors.surfaceContainer),
-        surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(
-          borderRadius: radius,
-          side: BorderSide(
-            color: colors.outlineVariant.withValues(alpha: 0.65),
+      // 同上：RepaintBoundary 只包 Material 填充，不隔离 separateChild 的
+      // backdrop 层。
+      child: RepaintBoundary(
+        child: Material(
+          color: shell.cardColor(colors.surfaceContainer),
+          surfaceTintColor: Colors.transparent,
+          shape: RoundedRectangleBorder(
+            borderRadius: radius,
+            side: BorderSide(
+              color: colors.outlineVariant.withValues(alpha: 0.65),
+            ),
           ),
+          clipBehavior: Clip.antiAlias,
+          child: const SizedBox.expand(),
         ),
-        clipBehavior: Clip.antiAlias,
-        child: const SizedBox.expand(),
       ),
     );
   }
@@ -963,8 +1030,14 @@ class _DockIcons extends StatelessWidget {
         // :844-846 — the scroll viewport clips overflow content only;
         // vertical paint is not clipped so magnified icons/tooltips can
         // reach into the band head-room.
+        // 像素对齐（P0）：`layout()` 保持连续坐标（纯函数/测试不动），所有
+        // 摆放几何在这里取整——contentWidth、slot left/span、divider left。
+        // span 取整把 ±0.5px 的余量留在槽尾 gap 里，图标像素宽度不变。
         child: SizedBox(
-          width: math.max(waveLayout.length, viewport.maxWidth),
+          // contentWidth 只进不退：`.9` 用 round 会向下取掉槽尾 gap、裁掉
+          // 最右 slot 半像素；宽度不参与 hit-test，ceil 保末尾余量。
+          width: math.max(waveLayout.length, viewport.maxWidth)
+              .ceilToDouble(),
           height: viewport.maxHeight,
           // Non-overflow content stays left-pinned like the Flickable (x=0);
           // the outer SizedBox only matters while the row is narrower than
@@ -972,7 +1045,9 @@ class _DockIcons extends StatelessWidget {
           child: Align(
             alignment: Alignment.centerLeft,
             child: SizedBox(
-              width: waveLayout.length, // :842 contentWidth = layout.length
+              width:
+                  waveLayout.length
+                      .ceilToDouble(), // :842 contentWidth = layout.length
               height: viewport.maxHeight,
               child: Stack(
                 clipBehavior: Clip.none,
@@ -994,7 +1069,11 @@ class _DockIcons extends StatelessWidget {
                     _DockSlotItem(
                       key: ValueKey(entries[index].key),
                       entry: entries[index],
-                      slot: waveLayout.slots[index],
+                      // 渲染层像素对齐：slot left/span 取整（±0.5px 余量留在
+                      // 槽尾 gap，图标像素宽不变）。divider 在 _AnimatedDivider
+                      // 内取整；band left 在 _DockBand 取整。`layout()` 的连续
+                      // 坐标不动。
+                      slot: _snappedSlot(waveLayout.slots[index]),
                       restingIconSize: baseLayout.size, // :971
                       monitorId: monitorId,
                       duration: slotAnim,
@@ -1059,8 +1138,9 @@ class _AnimatedDivider extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return AnimatedPositioned(
-      // :859 — the divider is centered on its axis position.
-      left: divider - kDockDividerWidth / 2,
+      // :859 — the divider is centered on its axis position. 渲染层取整，
+      // 与 slot/band 的像素对齐一致（layout 坐标保持连续）。
+      left: (divider - kDockDividerWidth / 2).roundToDouble(),
       top: top,
       width: kDockDividerWidth, // :857
       height: height,

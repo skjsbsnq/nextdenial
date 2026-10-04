@@ -51,13 +51,12 @@ const Duration _pressShadeDuration = Duration(milliseconds: 90);
 
 /// Signature for `dragMoved(key, position, offset, size)` (DockItem.qml:57).
 /// [position] and [grabOffset] are in scene coordinates.
-typedef DockItemDragMoved =
-    void Function(
-      String key,
-      Offset position,
-      Offset grabOffset,
-      double iconSize,
-    );
+typedef DockItemDragMoved = void Function(
+  String key,
+  Offset position,
+  Offset grabOffset,
+  double iconSize,
+);
 
 /// Signature for `dragReleased(key, position)` (DockItem.qml:58).
 typedef DockItemDragReleased = void Function(String key, Offset position);
@@ -163,12 +162,16 @@ class DockItem extends StatefulWidget {
   /// (:110-112).
   final PanelEdge edge;
 
-  /// Current (possibly magnified) icon edge (`iconSize`, :25).
+  /// Displayed (possibly magnified) icon edge (`iconSize`, :25). The artwork
+  /// itself is laid out/rasterized once at [restingIconSize] and scaled to
+  /// this edge by a `Transform.scale` — magnification no longer relayouts the
+  /// icon box, so the per-frame wave cannot re-rasterize SVG/PNG artwork.
   final double iconSize;
 
-  /// Unmagnified icon edge (`restingIconSize`, :26). The indicator bar no
-  /// longer derives from it (Denial sizes it by constants), but it remains part
-  /// of the entry contract for the parent layout.
+  /// Unmagnified icon edge (`restingIconSize`, :26): the layout/raster size of
+  /// the artwork. The indicator bar no longer derives from it (Denial sizes it
+  /// by constants), but it remains part of the entry contract for the parent
+  /// layout.
   final double restingIconSize;
 
   /// `hovered(key)` (:52, :206) — parent feeds magnification.
@@ -230,15 +233,16 @@ class _DockItemState extends State<DockItem>
   @override
   void initState() {
     super.initState();
-    _bounce = AnimationController(
-      vsync: this,
-      duration: _bounceUp + _bounceDown, // 560ms total (:93,:100)
-    )..addStatusListener((status) {
-      // `onStopped: root.bounce = 0` (:103) — never leave the icon mid-air.
-      if (status != AnimationStatus.forward && _bounce.value != 0) {
-        _bounce.value = 0;
-      }
-    });
+    _bounce =
+        AnimationController(
+          vsync: this,
+          duration: _bounceUp + _bounceDown, // 560ms total (:93,:100)
+        )..addStatusListener((status) {
+          // `onStopped: root.bounce = 0` (:103) — never leave the icon mid-air.
+          if (status != AnimationStatus.forward && _bounce.value != 0) {
+            _bounce.value = 0;
+          }
+        });
     _bounceValue = _bounce.drive(
       TweenSequence<double>([
         TweenSequenceItem(
@@ -331,8 +335,7 @@ class _DockItemState extends State<DockItem>
     _moved = false; // :210
     _pressPoint = event.position; // :211 (mapToItem(null) == scene coords)
     // :212-213 — grabOffset = pressPoint − icon centre.
-    final box =
-        _artworkKey.currentContext?.findRenderObject() as RenderBox?;
+    final box = _artworkKey.currentContext?.findRenderObject() as RenderBox?;
     final center = box != null
         ? box.localToGlobal(box.size.center(Offset.zero))
         : event.position;
@@ -414,15 +417,17 @@ class _DockItemState extends State<DockItem>
   /// under `packages/kos_dock/`, so `SvgPicture.asset` must pass
   /// `package: 'kos_dock'` or the loader misses and paints nothing.
   SvgPicture _bundledGlyph(String asset) => SvgPicture.asset(
-        asset,
-        package: 'kos_dock',
-        width: widget.iconSize,
-        height: widget.iconSize,
-        // Asset-miss fallback so a packaging slip degrades to a Material glyph
-        // instead of an empty slot.
-        errorBuilder: (context, error, stackTrace) =>
-            Icon(Icons.apps_rounded, size: widget.iconSize),
-      );
+    asset,
+    package: 'kos_dock',
+    // Artwork raster size is the resting edge; magnification scales the
+    // box on the GPU (see `build`), so the SVG is rasterized once.
+    width: widget.restingIconSize,
+    height: widget.restingIconSize,
+    // Asset-miss fallback so a packaging slip degrades to a Material glyph
+    // instead of an empty slot.
+    errorBuilder: (context, error, stackTrace) =>
+        Icon(Icons.apps_rounded, size: widget.restingIconSize),
+  );
 
   /// Entry artwork.
   ///
@@ -439,10 +444,8 @@ class _DockItemState extends State<DockItem>
         // neighbouring app icons.
         'launcher' => _bundledGlyph(_kLauncherAsset),
         'trash' => _bundledGlyph(
-            widget.appId == 'user-trash-full'
-                ? _kTrashFullAsset
-                : _kTrashAsset,
-          ),
+          widget.appId == 'user-trash-full' ? _kTrashFullAsset : _kTrashAsset,
+        ),
         _ => services.buildApplicationIcon(context, widget.appId),
       };
 
@@ -455,6 +458,16 @@ class _DockItemState extends State<DockItem>
           !_pressed &&
           !widget.dragged &&
           !widget.contextActive); // :175-176
+
+  /// GPU magnification factor for the artwork box: `iconSize` is the displayed
+  /// (magnified) edge while the artwork is rasterized at `restingIconSize`.
+  /// Falls back to 1 when the resting edge is 0 or the ratio is non-finite.
+  double get _iconScale {
+    final resting = widget.restingIconSize;
+    if (resting <= 0) return 1;
+    final scale = widget.iconSize / resting;
+    return scale.isFinite ? scale : 1;
+  }
 
   Offset get _bounceOffset => switch (widget.edge) {
     // :112 — horizontal edge bounces the icon upwards; vertical edges bounce
@@ -498,8 +511,7 @@ class _DockItemState extends State<DockItem>
     return Semantics(
       button: true,
       label: widget.name, // :203-205
-      onTap: () =>
-          _activate(semantic: true), // Accessible.onPressAction :205
+      onTap: () => _activate(semantic: true), // Accessible.onPressAction :205
       child: MouseRegion(
         cursor: widget._spacer
             ? services.normalCursor
@@ -519,91 +531,120 @@ class _DockItemState extends State<DockItem>
           onPointerCancel: _onPointerCancel,
           child: Opacity(
             opacity: widget.dragged ? 0 : 1, // :61
-            child: AnimatedBuilder(
-              animation: _bounceValue,
-              builder: (context, child) => Transform.translate(
-                offset: _bounceOffset,
-                child: child,
-              ),
-              child: Stack(
-                clipBehavior: Clip.none,
-                children: [
-                  SizedBox(
-                    key: _artworkKey,
-                    width: widget.iconSize,
-                    height: widget.iconSize,
-                    child: Opacity(
-                      // :126 — unavailable && no windows && !spacer.
-                      opacity:
-                          widget.available ||
-                              widget.windowCount > 0 ||
-                              widget._spacer
-                          ? 1
-                          : kDockItemUnavailableOpacity,
-                      child: ExcludeSemantics(
-                        child: Stack(
-                          fit: StackFit.expand,
-                          children: [
-                            _artwork(context, services),
-                            // pressShade (:115-124) — 90ms fade of a
-                            // 0.3 scrim instead of MultiEffect brightness.
-                            AnimatedOpacity(
-                              opacity: shade ? 1 : 0,
-                              duration: _reduceMotion
-                                  ? Duration.zero
-                                  : _pressShadeDuration,
-                              child: DecoratedBox(
-                                decoration: BoxDecoration(
-                                  color: colors.scrim.withValues(
-                                    alpha: _pressShadeAlpha,
-                                  ),
+            // bounce translate 已内移到 Transform.scale 里（见下方内层
+            // AnimatedBuilder），不再包整个 Stack——否则位移被双重施加。
+            child: Stack(
+              clipBehavior: Clip.none,
+              children: [
+                SizedBox(
+                  key: _artworkKey,
+                  // Displayed (magnified) edge — the layout footprint keeps
+                  // matching `slot.size` exactly like before (:25).
+                  width: widget.iconSize,
+                  height: widget.iconSize,
+                  child: Opacity(
+                    // :126 — unavailable && no windows && !spacer.
+                    opacity:
+                        widget.available ||
+                            widget.windowCount > 0 ||
+                            widget._spacer
+                        ? 1
+                        : kDockItemUnavailableOpacity,
+                    child: ExcludeSemantics(
+                      // 消毛刺（P0）：图标不再用放大后的 `iconSize` 重排/
+                      // 重栅格——wave 每帧改 iconSize 曾让 SVG/PNG 反复采样。
+                      // 画板以 `restingIconSize` 布局/栅格一次，放大交给
+                      // `Transform.scale`（bottomCenter 锚点与底部对齐的
+                      // 槽位一致；medium 双线性足够平滑）。scale 非有限或
+                      // resting 尺寸为 0 时回退 1。
+                      child: RepaintBoundary(
+                        child: Transform.scale(
+                          scale: _iconScale,
+                          alignment: Alignment.bottomCenter,
+                          filterQuality: FilterQuality.medium,
+                          // Align 松开外层 SizedBox 的 iconSize 紧约束——
+                          // 内层 SizedBox 才能保持 restingIconSize 的
+                          // raster 尺寸（紧约束会把画板撑回显示尺寸）。
+                          // bounce translate 放进 scale 内层（源 QML 位移
+                          // 随图标一起缩放，不再被放大反向稀释）。
+                          child: Align(
+                            alignment: Alignment.bottomCenter,
+                            child: AnimatedBuilder(
+                              animation: _bounceValue,
+                              builder: (context, child) => Transform.translate(
+                                offset: _bounceOffset,
+                                child: child,
+                              ),
+                              child: SizedBox(
+                                width: widget.restingIconSize,
+                                height: widget.restingIconSize,
+                                child: Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    _artwork(context, services),
+                                    // pressShade (:115-124) — 90ms fade of a
+                                    // 0.3 scrim instead of MultiEffect
+                                    // brightness.
+                                    AnimatedOpacity(
+                                      opacity: shade ? 1 : 0,
+                                      duration: _reduceMotion
+                                          ? Duration.zero
+                                          : _pressShadeDuration,
+                                      child: DecoratedBox(
+                                        decoration: BoxDecoration(
+                                          color: colors.scrim.withValues(
+                                            alpha: _pressShadeAlpha,
+                                          ),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
                                 ),
                               ),
                             ),
-                          ],
+                          ),
                         ),
                       ),
                     ),
                   ),
-                  // Indicator bar (:180-189) as a Stack overlay so it paints
-                  // *outside* the icon box, into the glass inset lane below the
-                  // icon. The source anchored its dot to the taller delegate box
-                  // (`y: height - 10`, :187); this box is the icon box, inset
-                  // `kDockIconBottomInset` above the band bottom, so the bar's
-                  // outward offset is `kDockIndicatorBottomInset -
-                  // kDockIconBottomInset` (= -6): 6px below/outside the icon box
-                  // puts the bar 3px above the band bottom. `Stack(clipBehavior:
-                  // Clip.none)` above lets it paint past the box.
-                  //
-                  // `Align`-free single-axis `Positioned`: left+right (or
-                  // top+bottom) sizes the opposite axis but leaves the bar's own
-                  // axis to the child, and `Center` keeps it centred along the
-                  // band without stretching the 10×3 (resp. 3×10) bar.
-                  if (showDot)
-                    switch (widget.edge) {
-                      PanelEdge.left => Positioned(
-                        left: kDockIndicatorBottomInset - kDockIconBottomInset,
-                        top: 0,
-                        bottom: 0,
-                        child: Center(child: indicator), // :186 transpose
-                      ),
-                      PanelEdge.right => Positioned(
-                        right: kDockIndicatorBottomInset - kDockIconBottomInset,
-                        top: 0,
-                        bottom: 0,
-                        child: Center(child: indicator), // :186 transpose
-                      ),
-                      _ => Positioned(
-                        left: 0,
-                        right: 0,
-                        bottom: kDockIndicatorBottomInset - kDockIconBottomInset,
-                        child: Center(child: indicator), // :187
-                      ),
-                    },
-                  if (_tooltipVisible)
-                    _buildTooltip(context, shell, colors),
-                ],
-              ),
+                ),
+                // Indicator bar (:180-189) as a Stack overlay so it paints
+                // *outside* the icon box, into the glass inset lane below the
+                // icon. The source anchored its dot to the taller delegate box
+                // (`y: height - 10`, :187); this box is the icon box, inset
+                // `kDockIconBottomInset` above the band bottom, so the bar's
+                // outward offset is `kDockIndicatorBottomInset -
+                // kDockIconBottomInset` (= -6): 6px below/outside the icon box
+                // puts the bar 3px above the band bottom. `Stack(clipBehavior:
+                // Clip.none)` above lets it paint past the box.
+                //
+                // `Align`-free single-axis `Positioned`: left+right (or
+                // top+bottom) sizes the opposite axis but leaves the bar's own
+                // axis to the child, and `Center` keeps it centred along the
+                // band without stretching the 10×3 (resp. 3×10) bar.
+                if (showDot)
+                  switch (widget.edge) {
+                    PanelEdge.left => Positioned(
+                      left: kDockIndicatorBottomInset - kDockIconBottomInset,
+                      top: 0,
+                      bottom: 0,
+                      child: Center(child: indicator), // :186 transpose
+                    ),
+                    PanelEdge.right => Positioned(
+                      right: kDockIndicatorBottomInset - kDockIconBottomInset,
+                      top: 0,
+                      bottom: 0,
+                      child: Center(child: indicator), // :186 transpose
+                    ),
+                    _ => Positioned(
+                      left: 0,
+                      right: 0,
+                      bottom: kDockIndicatorBottomInset - kDockIconBottomInset,
+                      child: Center(child: indicator), // :187
+                    ),
+                  },
+                if (_tooltipVisible) _buildTooltip(context, shell, colors),
+              ],
             ),
           ),
         ),

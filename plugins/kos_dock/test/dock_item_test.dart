@@ -105,13 +105,17 @@ Finder _indicatorBar() => find.descendant(
   ),
 );
 
-/// The bounce Transform directly under the AnimatedBuilder inside DockItem.
+/// The bounce Transform inside DockItem — identified by its [SizedBox] child
+/// (the resting-size artwork box) so the magnification `Transform.scale`
+/// (wrapping it one level up) is not matched.
 Finder _bounceTransform() => find.descendant(
   of: find.descendant(
     of: find.byType(DockItem),
     matching: find.byType(AnimatedBuilder),
   ),
-  matching: find.byType(Transform),
+  matching: find.byWidgetPredicate(
+    (widget) => widget is Transform && widget.child is SizedBox,
+  ),
 );
 
 Offset _bounceOffset(WidgetTester tester) {
@@ -228,6 +232,51 @@ void main() {
     final magnified = await build(54);
     expect(magnified, resting);
     expect(magnified.size.width, kDockIndicatorBarLength);
+  });
+
+  testWidgets('magnified icon scales on the GPU at resting raster size', (
+    tester,
+  ) async {
+    // P0 消毛刺：放大后 iconSize=54 的显示尺寸由 Transform.scale 完成，画板仍
+    // 以 restingIconSize=36 布局/栅格（SVG/PNG 不再每帧重采样）。显示框保持
+    // `iconSize`，内部 raster box 保持 `restingIconSize`，scale = 54/36 = 1.5。
+    await tester.pumpWidget(
+      _bottomHarness(
+        services: _FakeServices(),
+        item: const DockItem(
+          entryKey: 'a',
+          name: 'Demo',
+          appId: 'demo',
+          iconSize: 54,
+          restingIconSize: 36,
+        ),
+      ),
+    );
+
+    final scale = tester.widget<Transform>(
+      find.descendant(
+        of: find.byType(DockItem),
+        matching: find.byWidgetPredicate(
+          (w) => w is Transform && w.child is Align,
+        ),
+      ),
+    );
+    expect(scale.transform.getMaxScaleOnAxis(), closeTo(1.5, 1e-9));
+    expect(scale.alignment, Alignment.bottomCenter);
+
+    // 内部画板以 resting 尺寸布局（raster 一次），显示框占 iconSize。
+    final rasterBox = tester.widget<SizedBox>(
+      find.descendant(
+        of: find.byWidgetPredicate(
+          (w) => w is Transform && w.child is Align,
+        ),
+        matching: find.byType(SizedBox),
+      ),
+    );
+    expect(rasterBox.width, 36);
+    expect(rasterBox.height, 36);
+    // 显示框（_artworkKey 所在 SizedBox）仍为 iconSize。
+    expect(tester.getSize(find.byType(DockItem)).height, 54);
   });
 
   testWidgets('focused entry uses indicator alpha 1.0', (tester) async {
