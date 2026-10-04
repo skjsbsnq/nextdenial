@@ -1,0 +1,4 @@
+# 本地 SDK override 由开发者提供，禁止入库（见 TASK-00 约束）。
+pubspec_overrides.yaml
+.dart_tool/
+build/

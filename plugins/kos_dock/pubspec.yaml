@@ -1,0 +1,27 @@
+name: kos_dock
+description: >-
+  KOS macOS-style floating Dock (port from NextKde) as a Denial plugin.
+publish_to: none
+version: 0.0.0
+environment:
+  sdk: ^3.13.0
+  flutter: 3.47.5
+dependencies:
+  flutter:
+    sdk: flutter
+  denial_sdk: '0.0.0'
+  denial_flutter_sdk: '0.0.0'
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+denial_plugin:
+  schema: 1
+  name: KOS Dock
+  provides:
+    # 单个 ShellSurface：dock 本体（kos_dock.dock，aboveWindows 层，每输出一实例）。
+    # 弹层（预览/右键菜单）走 OverlayPortal，不另占 surface；dock 悬浮
+    # 不挤压工作区，故不声明 ShellWorkArea。
+    - contract: package:denial_flutter_sdk/surfaces.dart#ShellSurface
+      count: 1
