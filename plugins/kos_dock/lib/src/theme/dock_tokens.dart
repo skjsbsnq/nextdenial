@@ -1159,11 +1159,20 @@ const double kDockBatteryBoltFontSize = 9.24;
 /// 电量格状态色阈值：fillColor 分档 >95 / ≥50 / ≥15 / <15。
 ///
 /// KOS: bar/Battery.qml:111-121 — `percent > 95 ? #30d158 : >= 50 ? 前景
-/// : >= 15 ? #ff9f0a : #ff453a`；本端按 CONSTRAINTS §3 映射语义色
-/// （accent/textPrimary/performanceWarning/performanceBad）。
+/// : >= 15 ? #ff9f0a : #ff453a`。
 const int kDockBatteryFullThreshold = 95;
 const int kDockBatteryMidThreshold = 50;
 const int kDockBatteryLowThreshold = 15;
+
+/// 电量格 KOS 字面状态色（**不**走 shellTheme 语义映射——用户要求严格对齐
+/// KOS 视觉效果：>95 绿 `#30d158`、15–49 橙 `#ff9f0a`、<15 红 `#ff453a`、
+/// 其余档=前景 `textPrimary`）。KOS `IconAppearanceService` tint 分支不移植
+/// （Denial 无图标外观服务）；字面色是 KOS 设计原色，记 docs/visual-deltas.md。
+///
+/// KOS: bar/Battery.qml:113,117-118。
+const int kDockBatteryFullColor = 0xff30d158;
+const int kDockBatteryWarnColor = 0xffff9f0a;
+const int kDockBatteryCritColor = 0xffff453a;
 
 // ── TASK-08 托盘 Wi-Fi / 蓝牙状态格 + 弹层面板 ──────────────────────────
 
@@ -1663,15 +1672,6 @@ const Duration kDockControlCenterPageDuration = Duration(milliseconds: 200);
 const double kDockControlCenterPageStartScale = 0.96;
 const double kDockControlCenterPageOffset = 8;
 
-/// 控制中心格 glyph 自绘几何（px，24×24 点击面内）：两条水平滑杆 + 两枚
-/// 圆钮（KOS 是 BundledIcon `control-center` 工程图形，本端近似自绘，记
-/// docs/visual-deltas.md）。
-const double kDockControlCenterGlyphTrackTop = 8;
-const double kDockControlCenterGlyphTrackBottom = 16;
-const double kDockControlCenterGlyphTrackLeft = 3;
-const double kDockControlCenterGlyphTrackRight = 15;
-const double kDockControlCenterGlyphKnobRadius = 2.6;
-const double kDockControlCenterGlyphStroke = 1.8;
 
 /// pill busy 档（Wi-Fi/蓝牙）旋转弧（px/s）：21×21 画布、`r = w/2 − 1.5`、
 /// lineWidth 2、扫 1.5π、900ms/圈；glyph/spinner 交叉淡入 140ms。

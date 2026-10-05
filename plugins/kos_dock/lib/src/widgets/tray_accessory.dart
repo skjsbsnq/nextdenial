@@ -7,8 +7,8 @@
 ///   删掉已消失的 id、新 id 追加尾部，宿主列表重排不搬动既有顺序。v1 只
 ///   维稳、不持久化排序（KOS `SysTrayOrderService` 的 Alt+拖拽重排与持久序
 ///   砍掉，记 docs/visual-deltas.md）。
-/// - 状态格序（TASK-09/09）：托盘 id 段 → wifi → bluetooth → controlcenter →
-///   battery；控制中心格**恒显示**（无能力门控，TASK-09）。
+/// - 状态格序（KOS `trailingCells`，BarStatusArea.qml:28-33）：托盘 id 段 →
+///   wifi(network) → battery → controlcenter（settings 无 SDK 等价物隐藏）；
 /// - 折两行：`itemCount > 1 && availableHeight >= itemSize*2`（KOS
 ///   bar/SysTray.qml:74-77；itemSize=iconSize+8=26 → 阈值 52）；`itemCount`
 ///   含托盘 id 与可见状态格（KOS `allKeys` 同式计 shell 格）。
@@ -39,7 +39,6 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../theme/dock_tokens.dart';
-import 'dock_bluetooth_panel.dart';
 import 'dock_control_center_panel.dart';
 import 'dock_preview_popup.dart' show DockPopupCoordinator;
 import 'dock_status_panels.dart';
@@ -117,6 +116,11 @@ class _DockTrayAccessoryState extends ConsumerState<DockTrayAccessory> {
   /// `_orderedIds` 范式——状态/可见性变化不得搬动既有顺序）。
   final _orderedIds = <String>[];
 
+  /// 状态格（build 内赋值给 [_flowOrder] 混排；`?` 空值安全进 children）。
+  Widget? _wifiCell;
+  Widget? _batteryCell;
+  late Widget _controlCenterCell;
+
   @override
   Widget build(BuildContext context) {
     final services = widget.services;
@@ -129,24 +133,22 @@ class _DockTrayAccessoryState extends ConsumerState<DockTrayAccessory> {
       if (!_orderedIds.contains(id)) _orderedIds.add(id);
     }
     final metrics = DockMetricsScope.of(context);
-    final colors = context.shellColors;
     final battery = ref.watch(services.battery);
     final hasBattery = battery.capacity != null;
     // TASK-08 状态格能力门控（能力缺失隐藏，不伪造占位——CONSTRAINTS
     // 「无等价物的格隐藏并记档」）：
     // wifi ← `snapshot.wifiDeviceAvailable`（KOS `NetworkService.available`，
-    // NetworkStatus.qml:28 `visible`）；bt ← `BluetoothState.available`。
+    // NetworkStatus.qml:28 `visible`）。
     final netState = ref.watch(networkConnectivityProvider);
-    final btState = ref.watch(bluetoothProvider);
     final hasWifi = netState.snapshot.wifiDeviceAvailable;
-    final hasBluetooth = btState.available;
 
     // KOS `allKeys` = 托盘 id + 可见状态格（SysTray.qml:69-73 itemCount 计
-    // 全部格）；可见格 = battery + wifi + bluetooth + controlcenter（TASK-09
-    // 控制中心格**恒显示**——面板是 Flutter 侧自绘，不依赖系统能力门控）。
+    // 全部格）；可见格 = wifi + battery + controlcenter——**无独立蓝牙格**
+    // （KOS `trailingCells` 只有 network/battery/settings/controlcenter，
+    // BarStatusArea.qml:28-33；蓝牙在 Wi-Fi 面板与控制中心里）。controlcenter
+    // （TASK-09）**恒显示**（Flutter 侧自绘面板，无系统能力门控）。
     final statusCells =
         (hasWifi ? 1 : 0) +
-        (hasBluetooth ? 1 : 0) +
         (hasBattery ? 1 : 0) +
         1;
     final itemCount = _orderedIds.length + statusCells;
@@ -158,32 +160,31 @@ class _DockTrayAccessoryState extends ConsumerState<DockTrayAccessory> {
       // computedDockHeight；BarStatusArea.qml:227 `root.height`）。
       availableHeight: metrics.dockHeight,
     );
-    // 宽度拆两段估算：托盘段只按托盘 id 数估（宿主 wrap 受同宽约束），状态格
-    // 段按 KOS 格几何 iconSpacing+itemSize 逐格追加——两段相加 ≤ 单条
-    // dockTrayEstimateWidth(itemCount: 总数) 的上界，且永远 ≥ 宿主实测宽
-    // （宿主 22px 钮 + 4/8px 间距 < KOS 26px 格 + 6px 间距），保证内容不溢出
-    // 内层 Row。与 `KosDockShell` 传给 fromWidth 的估算式同式（widget.
-    // trayWidth 非 null 时用 shell 传入值，两者同源不会漂移）。
-    final trayWidth = dockTrayEstimateWidth(
-      itemCount: _orderedIds.length,
+    // 宽度 = KOS 格几何一次性估算（托盘 id + 状态格同格同距，KOS
+    // `allKeys` 语义）；宿主托盘 button 实测 22×22＜26px 格、单渲项无内嵌
+    // 间距 → 实际内容宽 ≤ 此估算（偏保守偏宽，偏差记 deltas）。与
+    // `KosDockShell` 传给 fromWidth 的估算式同式（widget.trayWidth 非 null
+    // 时用 shell 传入值，两者同源不会漂移）。
+    final contentWidth = dockTrayEstimateWidth(
+      itemCount: itemCount,
       twoRows: twoRows,
     );
-    final contentWidth =
-        trayWidth + statusCells * (kDockTrayIconSpacing + kDockTrayItemSize);
     // 槽宽 = max(iconSlotSize, trayWidth)：回流后 dockWidth 恒能包住槽宽；
     // shell 传入值与本地同式重算一致，独立宿主（trayWidth=null）取本地值。
     final slotWidth = widget.trayWidth ?? contentWidth;
-    // 格顺序：托盘 id 段 → wifi → bluetooth → battery（任务卡「在 battery
-    // 格之前追加」；KOS `BarStatusArea.trailingCells` 序 network→battery）。
-    // 每只格挂固定 key：能力位翻转（wifi/bt/battery 出现或消失）时 Flutter
-    // 按下标复用 Element 会 unmount 另一只 anchor（已开面板被销毁、hover/press
-    // 态重置）——对照 `dock_shell.dart` 槽位 ValueKey（`dock.launcher`/`dock.tray`
-    // 等）范式。
-    final wifiCell = hasWifi
-        ? Padding(
+    // 格顺序：托盘 id 段 → wifi(network) → battery → controlcenter——对齐
+    // KOS `BarStatusArea.trailingCells` 序（BarStatusArea.qml:28-33：
+    // network → battery → settings → controlcenter；settings 无 SDK 等价物
+    // 隐藏）。**无独立蓝牙格**（KOS 无此格）。每只格挂固定 key：能力位
+    // 翻转（wifi/battery 出现或消失）时 Flutter 按下标复用 Element 会
+    // unmount 另一只 anchor（已开面板被销毁、hover/press 态重置）——对照
+    // `dock_shell.dart` 槽位 ValueKey（`dock.launcher`/`dock.tray` 等）范式。
+    // 格本体不带左 padding——两行 `Wrap(spacing:)`/单行 Row 显式间距统一管
+    // （KOS `SysTray` 的 iconSpacing 由网格列距承担，不属格内几何）。key 仍
+    // 挂格外层：能力位翻转时按下标复用 Element 不卸其它 anchor。
+    _wifiCell = hasWifi
+        ? SizedBox(
             key: const ValueKey<String>('dock.cell.wifi'),
-            // KOS: bar/SysTray.qml:13 — 格间 iconSpacing 6。
-            padding: const EdgeInsets.only(left: kDockTrayIconSpacing),
             child: DockWifiPanelAnchor(
               services: services,
               coordinator: widget.coordinator,
@@ -214,34 +215,11 @@ class _DockTrayAccessoryState extends ConsumerState<DockTrayAccessory> {
           )
         : null;
 
-    final bluetoothCell = hasBluetooth
-        ? Padding(
-            key: const ValueKey<String>('dock.cell.bluetooth'),
-            padding: const EdgeInsets.only(left: kDockTrayIconSpacing),
-            child: DockBluetoothPanelAnchor(
-              services: services,
-              coordinator: widget.coordinator,
-              child: Builder(
-                builder: (context) => DockBluetoothCell(
-                  powered: btState.powered,
-                  busy: btState.powerChanging || btState.refreshing,
-                  tooltip: btState.powered ? '蓝牙' : '蓝牙已关闭',
-                  cursor: services.linkCursor,
-                  accent: ref.watch(services.accent),
-                  onToggle: () =>
-                      DockStatusPanelAnchorState.togglePanelOf(context),
-                ),
-              ),
-            ),
-          )
-        : null;
-
     // 控制中心格（TASK-09，KOS `ControlCenterToggle.qml`）：恒显示，点击
     // toggle `DockControlCenterPanel`（与 wifi/bt 面板、图标预览/菜单共享
     // 同一 `DockPopupCoordinator`）。
-    final controlCenterCell = Padding(
+    _controlCenterCell = SizedBox(
       key: const ValueKey<String>('dock.cell.controlcenter'),
-      padding: const EdgeInsets.only(left: kDockTrayIconSpacing),
       child: DockControlCenterPanelAnchor(
         services: services,
         coordinator: widget.coordinator,
@@ -254,67 +232,79 @@ class _DockTrayAccessoryState extends ConsumerState<DockTrayAccessory> {
       ),
     );
 
-    final Widget? batteryCell = hasBattery
-        ? Padding(
+    _batteryCell = hasBattery
+        ? SizedBox(
             key: const ValueKey<String>('dock.cell.battery'),
-            // KOS: bar/SysTray.qml:13 — 格间 iconSpacing 6。
-            padding: const EdgeInsets.only(left: kDockTrayIconSpacing),
             child: DockBatteryCell(
               status: battery,
               services: services,
-              accent: ref.watch(services.accent),
             ),
           )
         : null;
-
     return SizedBox(
       width: slotWidth,
       height: metrics.dockHeight,
       child: Align(
         alignment: Alignment.centerRight,
-        child: SizedBox(
-          width: contentWidth,
-          height: metrics.dockHeight,
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.end,
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              if (_orderedIds.isNotEmpty)
-                twoRows
-                    // 两行：宿主 `Wrap` 按 ceil(托盘项数/rowCount) 列约束总宽
-                    // （KOS: bar/SysTray.qml:182-187 `columnCount`、列宽
-                    // itemSize+iconSpacing）。宿主 wrap 的格距恒 8≠KOS 6、
-                    // 且 shell 格在宿主 wrap 之外（KOS 把格混排进同一网格），
-                    // 两处偏差记 docs/visual-deltas.md。
-                    ? Align(
-                        alignment: Alignment.centerRight,
-                        child: ConstrainedBox(
-                          constraints: BoxConstraints(maxWidth: trayWidth),
-                          child: services.buildSystemTray(
-                            context,
-                            horizontal: true,
-                            wrap: true,
-                            foregroundColor: colors.textPrimary,
-                            itemIds: List<String>.unmodifiable(_orderedIds),
-                          ),
-                        ),
-                      )
-                    : services.buildSystemTray(
-                        context,
-                        horizontal: true,
-                        // KOS: bar/SysTray.qml:184-189 — 单行自然宽排。
-                        wrap: false,
-                        foregroundColor: colors.textPrimary,
-                        itemIds: List<String>.unmodifiable(_orderedIds),
-                      ),
-              ?wifiCell,
-              ?bluetoothCell,
-              controlCenterCell,
-              ?batteryCell,
-            ],
+          // KOS: bar/SysTray.qml:193-196 — 内容块 `anchors.centerIn`、
+          // `implicitHeight = rowCount * itemSize`（两行=52 在 dockHeight 内
+          // 居中，上下各留 (dockHeight-52)/2）。Flutter `Wrap` 会取自身
+          // cross 轴最大高（=约束高）顶头排 → 用 SizedBox 收高度让 Align
+          // 垂直居中。
+          child: Align(
+            child: SizedBox(
+              width: contentWidth,
+              // KOS: :188 — implicitHeight = rowCount * itemSize。
+              height: (twoRows ? 2 : 1) * kDockTrayItemSize,
+              // KOS: bar/SysTray.qml —— 托盘项与 shell 状态格混排同一网格
+              // （`allKeys = nativeKeys + trailingCellKeys`）。两行时 KOS
+              // `slotOriginIn` 按列填：row=index%rows、
+              // column=floor(index/rows)（:119-136）；Flutter `Wrap` 按行
+              // 填 → 子项统一包成 itemSize(26)×26 格保证换行点=列边界
+              // （宿主托盘钮 22px 居中进槽），再按 `r, r+2, r+4…`（行主序）
+              // 重排喂给 Wrap，等价 KOS 列主序交错。单行是同式 rows=1
+              // 横排，天然序即可。
+              child: Wrap(
+                // KOS: SysTray.qml:13 — 格间 iconSpacing 6（行距同，
+                // 两行各 26px 恰好贴满 52 无额外 runSpacing）。
+                spacing: kDockTrayIconSpacing,
+                runSpacing: 0,
+                alignment: WrapAlignment.start,
+                children: [
+                  for (final cell in _flowOrder(twoRows: twoRows))
+                    SizedBox.square(
+                      dimension: kDockTrayItemSize,
+                      child: Center(child: cell),
+                    ),
+                ],
+              ),
+            ),
           ),
         ),
-      ),
     );
+  }
+
+  /// 按 KOS `allKeys` 序组装格子（托盘 id 段 → wifi → battery →
+  /// controlcenter）；`twoRows` 时重排为 Wrap 行主序输入以还原 KOS
+  /// 列主序交错（见 build 内注释）。
+  List<Widget> _flowOrder({required bool twoRows}) {
+    final cells = <Widget>[
+      for (final id in _orderedIds)
+        widget.services.buildSystemTray(
+          context,
+          horizontal: true,
+          wrap: false,
+          foregroundColor: context.shellColors.textPrimary,
+          itemIds: List<String>.unmodifiable([id]),
+        ),
+      ?_wifiCell,
+      ?_batteryCell,
+      _controlCenterCell,
+    ];
+    if (!twoRows) return cells;
+    return [
+      for (var i = 0; i < cells.length; i += 2) cells[i],
+      for (var i = 1; i < cells.length; i += 2) cells[i],
+    ];
   }
 }

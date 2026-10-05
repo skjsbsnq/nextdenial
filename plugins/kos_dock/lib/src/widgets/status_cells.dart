@@ -1,15 +1,15 @@
-/// TASK-06/08 状态格（trailing cells）：KOS `BarStatusArea` 托盘区尾部 shell
-/// 格（`trailingCells = network/battery/settings/controlcenter`，
-/// KOS: bar/BarStatusArea.qml:26-34）中**有 SDK 等价物**的格——battery、
-/// wifi、bluetooth。
+/// TASK-06/08/09 状态格（trailing cells）：KOS `BarStatusArea` 托盘区尾部
+/// shell 格（`trailingCells = network/battery/settings/controlcenter`，
+/// KOS: bar/BarStatusArea.qml:28-33）中**有 SDK 等价物**的格——wifi、
+/// battery、controlcenter。
 ///
-/// v1 可见格：battery（`services.battery` 有数据时）、wifi（
-/// `networkConnectivityProvider.snapshot.wifiDeviceAvailable`）、bluetooth
-/// （`bluetoothProvider.available`）、controlcenter（`DockControlCenterCell`，
-/// TASK-09：Flutter 侧自绘面板 + 状态下发，恒显示、无系统能力门控）；
-/// settings 在 SDK 无对应面板与开关 → 仍隐藏，不伪造占位（任务卡
-/// 「无等价物的格隐藏并记档」，见 docs/visual-deltas.md）。clock 已由融合
-/// 信息卡承担（KOS 融合态 `clockInInfoCarousel`，不重复）。
+/// v1 可见格：wifi（`networkConnectivityProvider.snapshot.wifiDeviceAvailable`）、
+/// battery（`services.battery` 有数据时）、controlcenter（`DockControlCenterCell`，
+/// TASK-09：Flutter 侧自绘面板 + 状态下发，恒显示、无系统能力门控）。
+/// **无独立蓝牙格**（KOS `trailingCells` 不含 bluetooth；蓝牙入口在 Wi-Fi
+/// 面板与控制中心里）；settings 在 SDK 无对应面板与开关 → 仍隐藏，不伪造
+/// 占位（任务卡「无等价物的格隐藏并记档」，见 docs/visual-deltas.md）。
+/// clock 已由融合信息卡承担（KOS 融合态 `clockInInfoCarousel`，不重复）。
 ///
 /// 几何/配色移植 KOS `bar/Battery.qml` + `bar/NetworkStatus.qml` +
 /// `bar/WifiSignalIcon.qml`（源根
@@ -33,22 +33,18 @@ import 'package:flutter/widgets.dart';
 import '../theme/dock_tokens.dart';
 import 'dock_status_panels.dart';
 
-/// 电量格 fillColor 的语义色映射（纯函数，可测）。
-///
-/// KOS: bar/Battery.qml:111-118 — `percent > 95 ? "#30d158" : >= 50 ? 前景色
-/// : >= 15 ? "#ff9f0a" : "#ff453a"`。CONSTRAINTS §3 要求走 shellTheme 语义
-/// 角色：ShellColorScheme 无 success/green 语义，>95 档映射 `theme.accent`
-/// （语义偏差记 docs/visual-deltas.md）；其余档 →
-/// `textPrimary`/`performanceWarning`/`performanceBad`。
-Color dockBatteryFillColor(
-  ShellColorScheme colors,
-  int percent, {
-  required Color accent,
-}) {
-  if (percent > kDockBatteryFullThreshold) return accent;
+/// 电量格 fillColor：KOS `Battery.qml:111-118` 分档字面色（**不**映射
+/// accent/语义色——用户要求严格对齐 KOS 视觉：>95 绿、≥50 前景、≥15 橙、
+/// 否则红）。
+Color dockBatteryFillColor(ShellColorScheme colors, int percent) {
+  if (percent > kDockBatteryFullThreshold) {
+    return const Color(kDockBatteryFullColor);
+  }
   if (percent >= kDockBatteryMidThreshold) return colors.textPrimary;
-  if (percent >= kDockBatteryLowThreshold) return colors.performanceWarning;
-  return colors.performanceBad;
+  if (percent >= kDockBatteryLowThreshold) {
+    return const Color(kDockBatteryWarnColor);
+  }
+  return const Color(kDockBatteryCritColor);
 }
 
 /// 电量格（KOS `Battery.qml`）：capacity 为 null（unknown）时由调用方整体
@@ -62,7 +58,6 @@ class DockBatteryCell extends StatelessWidget {
   const DockBatteryCell({
     required this.status,
     required this.services,
-    required this.accent,
     super.key,
   });
 
@@ -70,10 +65,6 @@ class DockBatteryCell extends StatelessWidget {
   /// 收缩只是兜底）。
   final BatteryStatus status;
   final ShellServices services;
-
-  /// `services.accent` 的快照色（调用方 watch 后传入，保持本件
-  /// StatelessWidget 不依赖 riverpod）。
-  final Color accent;
 
   @override
   Widget build(BuildContext context) {
@@ -85,14 +76,12 @@ class DockBatteryCell extends StatelessWidget {
     final level = percent.clamp(0, 100) / 100.0;
     // KOS: bar/Battery.qml:119-121 — boltColor: 50≤p≤95 → #ff9f0a，否则前景。
     // 语义映射：中段走 performanceWarning，其余 textPrimary。
+    // KOS: bar/Battery.qml:119-121 — boltColor: 50≤p≤95 → #ff9f0a，否则前景。
     final boltColor =
         percent >= kDockBatteryMidThreshold &&
             percent <= kDockBatteryFullThreshold
-        ? colors.performanceWarning
+        ? const Color(kDockBatteryWarnColor)
         : colors.textPrimary;
-    // KOS: bar/Battery.qml:98-100 — 「充电中 · N%」/「电池 · N%」tooltip；
-    // 经 SDK strings 本地化后用于无障碍 label（自绘 hover tooltip 不做，
-    // 记 docs/visual-deltas.md）。
     final strings = services.strings(context);
     final label =
         '${strings.batteryTitle}: '
@@ -129,7 +118,7 @@ class DockBatteryCell extends StatelessWidget {
                       ),
                 decoration: BoxDecoration(
                   borderRadius: BorderRadius.circular(kDockBatteryFillRadius),
-                  color: dockBatteryFillColor(colors, percent, accent: accent),
+                  color: dockBatteryFillColor(colors, percent),
                 ),
               ),
             ),
@@ -626,124 +615,6 @@ class _DockWifiCellState extends State<DockWifiCell> {
   );
 }
 
-/// 蓝牙状态格（新增最小格——KOS 无独立托盘蓝牙格，glyph 取
-/// `BluetoothPanel.qml:116-125` 行内折线的同式绘制，记 deltas）：26px 槽 +
-/// 18px 手绘 BT glyph + 点击 toggle 面板。
-class DockBluetoothCell extends StatefulWidget {
-  const DockBluetoothCell({
-    required this.powered,
-    required this.busy,
-    required this.tooltip,
-    required this.cursor,
-    required this.onToggle,
-    required this.accent,
-    super.key,
-  });
-
-  /// `bluetoothProvider.powered`（点亮 = accent；熄灭 = 前景）。
-  final bool powered;
-
-  /// `powerChanging || refreshing`（格降透明度，KOS busy 语义）。
-  final bool busy;
-
-  /// tooltip 主行（无 KOS 对应——蓝牙格是新增件，tooltip 复用
-  /// `DockStatusTooltip` 规格）。
-  final String tooltip;
-
-  final MouseCursor cursor;
-  final VoidCallback onToggle;
-
-  /// `theme.accent` 快照（调用方 watch 后传入）。
-  final Color accent;
-
-  @override
-  State<DockBluetoothCell> createState() => _DockBluetoothCellState();
-}
-
-class _DockBluetoothCellState extends State<DockBluetoothCell> {
-  final _tooltip = OverlayPortalController();
-  bool _hovered = false;
-
-  void _setHovered(bool value) {
-    if (_hovered == value) return;
-    setState(() {
-      _hovered = value;
-      if (_hovered) {
-        _tooltip.show();
-      } else {
-        _tooltip.hide();
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    if (_tooltip.isShowing) _tooltip.hide();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final colors = context.shellColors;
-    return Semantics(
-      button: true,
-      label: widget.tooltip,
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onTap: widget.onToggle,
-        child: MouseRegion(
-          cursor: widget.cursor,
-          onEnter: (_) => _setHovered(true),
-          onExit: (_) => _setHovered(false),
-          child: OverlayPortal.overlayChildLayoutBuilder(
-            controller: _tooltip,
-            overlayChildBuilder: (context, layout) {
-              final anchor = MatrixUtils.transformRect(
-                layout.childPaintTransform,
-                Offset.zero & layout.childSize,
-              );
-              return Stack(
-                children: [
-                  Positioned(
-                    bottom:
-                        layout.overlaySize.height -
-                        anchor.top +
-                        kDockStatusTooltipGap,
-                    left: 0,
-                    right: 0,
-                    child: Align(
-                      alignment: Alignment.bottomCenter,
-                      heightFactor: 1,
-                      child: DockStatusTooltip(primary: widget.tooltip),
-                    ),
-                  ),
-                ],
-              );
-            },
-            child: SizedBox.square(
-              dimension: kDockTrayItemSize,
-              child: Center(
-                child: Opacity(
-                  opacity: widget.busy ? kDockWifiBusyOpacity : 1.0,
-                  child: CustomPaint(
-                    size: const Size.square(kDockStatusCellIconSize),
-                    painter: _BluetoothGlyphPainter(
-                      // 点亮 → accent；熄灭 → 前景（KOS 蓝牙卡 accent 点亮
-                      // 语义，控制中心 pill 同式）。
-                      color: widget.powered
-                          ? widget.accent
-                          : colors.textPrimary,
-                    ),
-                  ),
-                ),
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// 手绘蓝牙 glyph（KOS `BluetoothPanel.qml:116-125` 的折线：`scale(0.67)`
 /// 画布内 `M13.5,2.5 L20,9 L13.5,15 L20,21 L13.5,26.5 Z` +
@@ -966,14 +837,18 @@ class _DockControlCenterCellState extends State<DockControlCenterCell> {
                         // KOS: :18-19 — 24×24 点击面。
                         dimension: kDockControlCenterCellSize,
                         child: Center(
-                          child: CustomPaint(
-                            // KOS: :16,25-26 — 图标 18px。
-                            size: const Size.square(
-                              kDockControlCenterIconSize,
-                            ),
-                            painter: _ControlCenterGlyphPainter(
-                              color: colors.textPrimary,
-                            ),
+                          // KOS: :16,23-27 — BundledIcon(\"control-center\")
+                          // 工程图形 18px，colorized 投成前景。Denial 无内联
+                          // SVG 渲染：白描边 PNG asset + srcIn 投色等价于
+                          // KOS MultiEffect colorization（见 assets/README.md）。
+                          child: Image.asset(
+                            'assets/icons/control-center.png',
+                            package: 'kos_dock',
+                            width: kDockControlCenterIconSize,
+                            height: kDockControlCenterIconSize,
+                            fit: BoxFit.contain,
+                            color: colors.textPrimary,
+                            colorBlendMode: BlendMode.srcIn,
                           ),
                         ),
                       ),
@@ -987,54 +862,4 @@ class _DockControlCenterCellState extends State<DockControlCenterCell> {
       ),
     );
   }
-}
-
-/// 控制中心 glyph（KOS `BundledIcon("control-center")` 工程图形的近似自绘）：
-/// 两条水平滑杆 + 各一枚圆钮（对应 KOS 「dual-slider control-centre mark」，
-/// ControlCenterToggle.qml:7-8 注释）。画布 18×18（图标边长）。
-class _ControlCenterGlyphPainter extends CustomPainter {
-  const _ControlCenterGlyphPainter({required this.color});
-
-  final Color color;
-
-  /// 画布 18×18 → 常量以 24 系几何按 `size/24` 缩放（token 值是 24 系）。
-  static const double _designSize = 24;
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final scale = size.width / _designSize;
-    canvas.save();
-    canvas.scale(scale, scale);
-    final stroke = Paint()
-      ..color = color.withValues(alpha: 0.92)
-      ..strokeWidth = kDockControlCenterGlyphStroke
-      ..style = PaintingStyle.stroke
-      ..strokeCap = StrokeCap.round;
-    final knob = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
-    // 上滑杆（钮偏右）/下滑杆（钮偏左）：KOS mark 的两条滑轨。
-    const tracks = <double>[
-      kDockControlCenterGlyphTrackTop,
-      kDockControlCenterGlyphTrackBottom,
-    ];
-    const knobs = <double>[15, 7];
-    for (var i = 0; i < tracks.length; i++) {
-      final y = tracks[i];
-      canvas.drawLine(
-        Offset(kDockControlCenterGlyphTrackLeft, y),
-        Offset(kDockControlCenterGlyphTrackRight, y),
-        stroke,
-      );
-      canvas.drawCircle(
-        Offset(knobs[i], y),
-        kDockControlCenterGlyphKnobRadius,
-        knob,
-      );
-    }
-    canvas.restore();
-  }
-
-  @override
-  bool shouldRepaint(_ControlCenterGlyphPainter old) => old.color != color;
 }

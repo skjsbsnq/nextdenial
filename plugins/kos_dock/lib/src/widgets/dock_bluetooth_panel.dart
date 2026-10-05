@@ -40,8 +40,8 @@ import '../theme/dock_tokens.dart';
 import 'dock_status_panels.dart';
 import 'status_cells.dart';
 
-/// 蓝牙面板宿主：26px 格外包一层 anchor（格本体 `DockBluetoothCell` 的
-/// `onToggle` 绑 [DockStatusPanelAnchorState.togglePanel]）。
+/// 蓝牙面板宿主：26px 格外包一层 anchor。KOS `trailingCells` 无独立蓝牙
+/// 托盘格——本 anchor 现仅由控制中心蓝牙子页/测试复用面板逻辑。
 class DockBluetoothPanelAnchor extends DockStatusPanelAnchor {
   const DockBluetoothPanelAnchor({
     required this.services,

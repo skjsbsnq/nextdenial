@@ -34,3 +34,6 @@ flutter:
     # assets/README.md 的来源与 md5 记录）。
     - assets/icons/trash.png
     - assets/icons/trash_full.png
+    # 控制中心状态格 glyph（KOS BundledIcons.qml:93 `control-center` 内联
+    # SVG 栅格化；见 assets/README.md）。
+    - assets/icons/control-center.png

@@ -36,11 +36,22 @@ class DockMenuItem {
 /// 右键菜单面板：ShellBackdropBlur 玻璃；150ms OutCubic 开 / 140ms
 /// InCubic 关 + scale 0.96→1 + 20px 位移由调用方动画驱动
 /// （ACCEPTANCE 菜单条款；变换见 [DockMenuOverlay]）。
+///
+/// [progress]（0..1 显隐进度）只作用于**前景**（渐变+边框+菜单行），
+/// `ShellBackdropBlur` 的 backdrop 层从第一帧就满强度——外层 Opacity 套
+/// 整只面板会把模糊层一起淡化（模糊采样的是半透明桌面，出现「先透明
+/// 再模糊」的延迟观感），故淡入移到面板内部、backdrop 不吃进度。
 class DockMenuPanel extends StatelessWidget {
-  const DockMenuPanel({required this.items, super.key});
+  const DockMenuPanel({
+    required this.items,
+    this.progress = 1.0,
+    super.key,
+  });
 
   final List<DockMenuItem> items;
 
+  /// 显隐进度（0=全隐，1=完全展开）；默认 1（无淡入，如直接挂载/测试）。
+  final double progress;
   @override
   Widget build(BuildContext context) {
     final theme = context.shellTheme;
@@ -50,23 +61,28 @@ class DockMenuPanel extends StatelessWidget {
       blur: theme.backdropBlurEnabled,
       separateChild: true,
       borderRadius: radius,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          gradient: theme.panelGradient(
-            colors.panelBackground,
-            colors.panelBackgroundBottom,
+      // backdrop 层不吃 [progress]——模糊从第一帧就满强度；Opacity 只套前景
+      // （渐变+边框+菜单行），避免「先透明再模糊」。
+      child: Opacity(
+        opacity: progress,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            gradient: theme.panelGradient(
+              colors.panelBackground,
+              colors.panelBackgroundBottom,
+            ),
+            border: Border.all(color: colors.hairlineSoft),
           ),
-          border: Border.all(color: colors.hairlineSoft),
-        ),
-        child: ClipRRect(
-          borderRadius: radius,
-          child: SingleChildScrollView(
-            padding: const EdgeInsets.all(kDockMenuPadding),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [for (final item in items) _DockMenuRow(item: item)],
+          child: ClipRRect(
+            borderRadius: radius,
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(kDockMenuPadding),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [for (final item in items) _DockMenuRow(item: item)],
+              ),
             ),
           ),
         ),
@@ -163,11 +179,14 @@ class DockMenuOverlay extends StatelessWidget {
                 width: width,
                 child: AnimatedBuilder(
                   animation: progress,
-                  builder: (context, child) {
+                  builder: (context, _) {
                     final v = progress.value;
                     // ACCEPTANCE 菜单条款：scale 0.96→1 + ~20px 位移
                     // （底锚向上长）；开 150ms OutCubic / 关 140ms
                     // InCubic 由调用方动画驱动。
+                    // opacity 不套整只面板——backdrop 模糊会随透明度弱化
+                    // （「先透明再模糊」）；淡入改由 DockMenuPanel 内部
+                    // 只作用于前景（backdrop 第一帧即满强度）。
                     return Transform.translate(
                       offset: Offset(0, (1 - v) * kDockMenuEnterOffset),
                       child: Transform.scale(
@@ -175,14 +194,13 @@ class DockMenuOverlay extends StatelessWidget {
                             kDockMenuEnterScale +
                             (1 - kDockMenuEnterScale) * v,
                         alignment: Alignment.bottomCenter,
-                        child: Opacity(opacity: v, child: child),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxHeight: maxHeight),
+                          child: DockMenuPanel(items: items, progress: v),
+                        ),
                       ),
                     );
                   },
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxHeight: maxHeight),
-                    child: DockMenuPanel(items: items),
-                  ),
                 ),
               ),
             ],

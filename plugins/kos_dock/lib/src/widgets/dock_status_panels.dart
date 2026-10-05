@@ -323,19 +323,27 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
                 height: height,
                 child: AnimatedBuilder(
                   animation: _reveal,
-                  builder: (context, child) {
+                  builder: (context, _) {
                     final v = _reveal.value;
                     // KOS: common/AnimatedPopupWindow.qml:16-18 —
                     // opacity = revealProgress；scale = 0.96 + 0.04·reveal，
                     // transformOrigin = Bottom（bottom dock 向上弹）。
+                    // opacity 不套整只面板——backdrop 模糊会随透明度弱化
+                    // （「先透明再模糊」）；淡入改由 DockStatusPanelSurface
+                    // 内部只作用于前景（backdrop 第一帧即满强度）。
                     return Transform.scale(
                       scale:
                           kDockMenuEnterScale + (1 - kDockMenuEnterScale) * v,
                       alignment: Alignment.bottomCenter,
-                      child: Opacity(opacity: v, child: child),
+                      // reveal 经 scope 下发：DockStatusPanelSurface 读它只淡
+                      // 前景（backdrop 模糊不吃淡入）。open 与格外层同源。
+                      child: DockStatusPanelOpenScope(
+                        open: _open,
+                        reveal: v,
+                        child: widget.buildPanel(context),
+                      ),
                     );
                   },
-                  child: widget.buildPanel(context),
                 ),
               ),
             ],
@@ -348,6 +356,9 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
 
 /// 状态面板玻璃表面：`ShellBackdropBlur` + panelGradient + hairlineSoft 边
 /// （`_DockPreviewPanel`/`DockMenuPanel` 同式近似 KOS `LiquidGlassPanel`）。
+///
+/// 前景（渐变+边框+内容）按 `DockStatusPanelOpenScope.revealOf` 淡入；
+/// backdrop 模糊层不吃淡入——从第一帧就满强度，避免「先透明再模糊」。
 class DockStatusPanelSurface extends StatelessWidget {
   const DockStatusPanelSurface({
     required this.radius,
@@ -364,20 +375,26 @@ class DockStatusPanelSurface extends StatelessWidget {
     final theme = context.shellTheme;
     final colors = context.shellColors;
     final radius = BorderRadius.circular(this.radius);
+    // reveal 来自 DockStatusPanelAnchor 的 overlay scope；无祖先 → 1（独立
+    // 挂载/测试默认全展开）。
+    final reveal = DockStatusPanelOpenScope.revealOf(context);
     return ShellBackdropBlur(
       blur: theme.backdropBlurEnabled,
       separateChild: true,
       borderRadius: radius,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          gradient: theme.panelGradient(
-            colors.panelBackground,
-            colors.panelBackgroundBottom,
+      child: Opacity(
+        opacity: reveal,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            gradient: theme.panelGradient(
+              colors.panelBackground,
+              colors.panelBackgroundBottom,
+            ),
+            border: Border.all(color: colors.hairlineSoft),
           ),
-          border: Border.all(color: colors.hairlineSoft),
+          child: ClipRRect(borderRadius: radius, child: child),
         ),
-        child: ClipRRect(borderRadius: radius, child: child),
       ),
     );
   }
@@ -486,11 +503,19 @@ class DockStatusPanelEmptyLabel extends StatelessWidget {
 /// 面板开合态下发（KOS `ControlCenterToggle.panelOpen` 的等价）：状态格
 /// （控制中心格）据它调透明度并隐藏 tooltip。
 ///
+/// 面板开合态与 reveal 进度下发（KOS `ControlCenterToggle.panelOpen` 的等价
+/// + `AnimatedPopupWindow.revealProgress`）：状态格（控制中心格）据 `open`
+/// 调透明度并隐藏 tooltip；`DockStatusPanelSurface` 据 `reveal` 淡前景——
+/// backdrop 模糊不吃淡入（外层 Opacity 套整只面板会把模糊层一起淡化，
+/// 出现「先透明再模糊」），故 reveal 经本 scope 下发给 surface 内部。
+///
 /// KOS: bar/ControlCenterToggle.qml:32-33（`panelOpen ? 1.0 : 0.88`）、
-/// :47（`shown: containsMouse && !panelOpen`）。
+/// :47（`shown: containsMouse && !panelOpen`）；
+/// common/AnimatedPopupWindow.qml:16-18（`revealProgress` 驱动 opacity）。
 class DockStatusPanelOpenScope extends InheritedWidget {
   const DockStatusPanelOpenScope({
     required this.open,
+    this.reveal = 1.0,
     required super.child,
     super.key,
   });
@@ -498,13 +523,24 @@ class DockStatusPanelOpenScope extends InheritedWidget {
   /// 面板当前展开（`open()` 后、`close()` 前）。
   final bool open;
 
+  /// `AnimatedPopupWindow.revealProgress`（0=隐藏/关闭中，1=完全展开）；
+  /// 由 `DockStatusPanelSurface` 读，只淡前景不动 backdrop 模糊。
+  final double reveal;
+
   static bool of(BuildContext context) =>
       context
           .dependOnInheritedWidgetOfExactType<DockStatusPanelOpenScope>()
           ?.open ??
       false;
 
+  /// panel 的 reveal 进度（无祖先 → 1，独立挂载/测试默认全展开）。
+  static double revealOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<DockStatusPanelOpenScope>()
+          ?.reveal ??
+      1.0;
+
   @override
   bool updateShouldNotify(DockStatusPanelOpenScope oldWidget) =>
-      oldWidget.open != open;
+      oldWidget.open != open || oldWidget.reveal != reveal;
 }

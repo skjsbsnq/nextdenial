@@ -485,26 +485,38 @@ Future<void> _settle(WidgetTester tester) async {
 
 void main() {
   group('维稳排序（denial_taskbar tray.dart _orderedIds 范式）', () {
-    testWidgets('新 id 追加尾部、消失 id 移除、宿主重排不搬动既有顺序', (tester) async {
-      final services = _FakeShellServices(trayIds: ['a', 'b']);
+    testWidgets('新 id 追加尾部、消失 id 移除、宿主重排不搬动既有顺序', (
+      tester,
+    ) async {
+      final services = _FakeShellServices(trayIds: ['a', 'b', 'c']);
       await tester.pumpWidget(_wrapTray(services));
       await _settle(tester);
+      // 混排网格每 id 单渲一次 → 记录序列即渲染序。
+      List<List<String>> renderOrder() => [
+        for (final call in services.trayCalls) ?call.itemIds,
+      ];
+      expect(renderOrder(), [
+        ['a'],
+        ['b'],
+        ['c'],
+      ]);
 
-      expect(services.trayCalls.last.itemIds, ['a', 'b']);
-      // 宿主把顺序倒过来 + 新增 c：维稳后应 [a, b, c]（重排不发生）。
-      services.setTrayIds(['b', 'c', 'a']);
-      await tester.pump();
-      expect(services.trayCalls.last.itemIds, ['a', 'b', 'c']);
-
-      // a 消失 → [b, c]。
+      // a 消失 → 相对序保持 [b, c]（宿主给 [c, b] 也不搬动）。
       services.setTrayIds(['c', 'b']);
       await tester.pump();
-      expect(services.trayCalls.last.itemIds, ['b', 'c']);
+      expect(renderOrder(), [
+        ['b'],
+        ['c'],
+      ]);
 
       // a 回归 → 追加尾部 [b, c, a]。
       services.setTrayIds(['c', 'a', 'b']);
       await tester.pump();
-      expect(services.trayCalls.last.itemIds, ['b', 'c', 'a']);
+      expect(renderOrder(), [
+        ['b'],
+        ['c'],
+        ['a'],
+      ]);
     });
   });
 
@@ -529,38 +541,48 @@ void main() {
       expect(dockTrayEstimateWidth(itemCount: 3, twoRows: true), 58);
       expect(dockTrayEstimateWidth(itemCount: 4, twoRows: true), 58);
     });
-    testWidgets('dockHeight≥52（默认 59）+ itemCount>1 → wrap:true', (
+
+    testWidgets('itemCount>1 → 每 id 单渲混进同一 Wrap（wrap:false）', (
       tester,
     ) async {
       final services = _FakeShellServices(trayIds: ['a', 'b']);
       await tester.pumpWidget(_wrapTray(services));
       await _settle(tester);
-      expect(services.trayCalls.last.wrap, isTrue);
-      expect(services.trayCalls.last.horizontal, isTrue);
-      // foregroundColor 须透传 shellTheme textPrimary（fake 记录参数；
-      // fake 按钮 key 与宿主真实 key 不同属测试内部一致）。
+      // 混排网格：每个托盘 id 一次 buildSystemTray(itemIds:[id])，
+      // wrap:false（KOS iconSpacing 6 由外层 Wrap 管，不用宿主 4/8px 间距）。
+      expect(services.trayCalls.length, 2);
+      expect(services.trayCalls.map((call) => call.itemIds), [
+        ['a'],
+        ['b'],
+      ]);
+      expect(services.trayCalls.every((call) => !call.wrap), isTrue);
+      expect(services.trayCalls.every((call) => call.horizontal), isTrue);
+      // foregroundColor 须透传 shellTheme textPrimary（fake 记录参数；fake
+      // 按钮 key 与宿主真实 key 不同属测试内部一致）。
       expect(
         services.trayCalls.last.foregroundColor,
         const ShellThemeData().colors.textPrimary,
       );
 
-      // Wrap 总宽受 ceil(n/2) 列约束：2 托盘项（无 battery）→ 1 列 → 26。
+      // 混排 Wrap：KOS iconSpacing 6（不再是宿主的 8）。
       final wrap = tester.widget<Wrap>(find.byType(Wrap));
-      expect(wrap.spacing, 8); // 宿主实现固定 8（≠KOS 6，记 deltas）。
-      final wrapSize = tester.getSize(find.byType(Wrap));
-      expect(wrapSize.width, lessThanOrEqualTo(kDockTrayItemSize + 8));
+      expect(wrap.spacing, kDockTrayIconSpacing);
     });
 
-    // battery 计入 itemCount 驱动折行：1 托盘项 + battery = 2 → wrap:true
-    // （漏计 battery 时 itemCount=1 → 单行，此用例会挂）。
-    testWidgets('1 托盘项 + battery → itemCount=2 → wrap:true', (tester) async {
+    // battery 计入 itemCount 驱动折行；混排 Wrap 恒为一个（行数由
+    // dockTrayTwoRows 纯函数判定，wrap 标记不透传给宿主——宿主始终单渲）。
+    testWidgets('1 托盘项 + battery → itemCount=2 → 同 Wrap 混排', (
+      tester,
+    ) async {
       final services = _FakeShellServices(
         trayIds: ['a'],
         batteryStatus: const BatteryStatus(capacity: 88, charging: false),
       );
       await tester.pumpWidget(_wrapTray(services));
       await _settle(tester);
-      expect(services.trayCalls.last.wrap, isTrue);
+      expect(find.byType(Wrap), findsOneWidget);
+      expect(find.byType(DockBatteryCell), findsOneWidget);
+      expect(services.trayCalls.single.itemIds, ['a']);
     });
 
     test('纯函数：单项不折行（itemCount=1 → twoRows false）', () {
@@ -570,13 +592,17 @@ void main() {
       expect(dockTrayTwoRows(itemCount: 2, availableHeight: 59), isTrue);
     });
 
-    testWidgets('1 托盘项 + 控制中心格 → itemCount 2 → wrap:true', (tester) async {
+    testWidgets('1 托盘项 + 控制中心格 → itemCount 2 → 同 Wrap 混排', (
+      tester,
+    ) async {
       // TASK-09：控制中心格恒显示并计入 itemCount（KOS `allKeys` 同式）——
       // 「1 托盘项」不再是「单项」。
       final services = _FakeShellServices(trayIds: ['a']);
       await tester.pumpWidget(_wrapTray(services));
       await _settle(tester);
-      expect(services.trayCalls.last.wrap, isTrue);
+      expect(find.byType(Wrap), findsOneWidget);
+      expect(find.byType(DockControlCenterCell), findsOneWidget);
+      expect(services.trayCalls.single.itemIds, ['a']);
     });
   });
 
@@ -614,15 +640,15 @@ void main() {
       expect(find.text('⚡'), findsOneWidget);
     });
 
-    test('fillColor 语义色分档（KOS Battery.qml:111-118 的 §3 映射）', () {
+    test('fillColor KOS 字面色分档（Battery.qml:111-118）', () {
       final colors = const ShellThemeData().colors;
-      const accent = Color(0xFF4488FF);
-      Color pick(int p) => dockBatteryFillColor(colors, p, accent: accent);
-      expect(pick(96), accent); // >95 → accent（无 success 语义，记 deltas）
+      Color pick(int p) => dockBatteryFillColor(colors, p);
+      // >95 → KOS 绿 #30d158；≥50 → 前景；≥15 → KOS 橙 #ff9f0a；<15 → 红。
+      expect(pick(96), const Color(kDockBatteryFullColor));
       expect(pick(95), colors.textPrimary);
       expect(pick(50), colors.textPrimary);
-      expect(pick(15), colors.performanceWarning);
-      expect(pick(14), colors.performanceBad);
+      expect(pick(15), const Color(kDockBatteryWarnColor));
+      expect(pick(14), const Color(kDockBatteryCritColor));
     });
   });
 
@@ -673,7 +699,11 @@ void main() {
       final traySlot = tester.getSize(find.byKey(const ValueKey('dock.tray')));
       expect(traySlot.width, greaterThanOrEqualTo(58));
       expect(find.byKey(const ValueKey('dock.divider.tray')), findsOneWidget);
-      expect(services.trayCalls.last.itemIds, ['a', 'b', 'c']);
+      expect(services.trayCalls.map((call) => call.itemIds), [
+        ['a'],
+        ['b'],
+        ['c'],
+      ]);
     });
 
     testWidgets('托盘项 + battery 在 pill 行尾渲染且不撑爆', (tester) async {
@@ -691,9 +721,9 @@ void main() {
       expect(find.byKey(const ValueKey('tray.a')), findsOneWidget);
       expect(find.byKey(const ValueKey('tray.c')), findsOneWidget);
       expect(find.byType(DockBatteryCell), findsOneWidget);
-      expect(services.trayCalls.last.itemIds, ['a', 'b', 'c']);
-      // 4 个格（3 托盘 + 1 battery）→ 两行 wrap。
-      expect(services.trayCalls.last.wrap, isTrue);
+      // 每 id 单渲混进同一 Wrap；3 托盘 id → 3 次调用，均 wrap:false。
+      expect(services.trayCalls.length, 3);
+      expect(services.trayCalls.every((call) => !call.wrap), isTrue);
     });
   });
 }

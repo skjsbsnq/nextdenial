@@ -24,6 +24,9 @@ import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kos_dock/src/theme/dock_tokens.dart';
 import 'package:kos_dock/src/widgets/dock_bluetooth_panel.dart';
+import 'package:kos_dock/src/widgets/dock_control_center_panel.dart';
+import 'package:kos_dock/src/widgets/dock_status_panels.dart'
+    show DockStatusPanelAnchorState;
 import 'package:kos_dock/src/widgets/dock_wifi_panel.dart';
 import 'package:kos_dock/src/widgets/status_cells.dart';
 import 'package:kos_dock/src/widgets/tray_accessory.dart';
@@ -426,6 +429,50 @@ Widget _wrapTray({
   ),
 );
 
+/// 挂独立 `DockBluetoothPanelAnchor`（蓝牙格已删，面板改由控制中心承载；
+/// 本 helper 直接给 anchor 一个可点 child 以验证面板内行点击逻辑）。
+Widget _wrapBluetoothAnchor({
+  required _FakeShellServices services,
+  required _FakeNetworkBackend network,
+  required _FakeBluetoothBackend bluetooth,
+  Size size = const Size(800, 200),
+}) => ProviderScope(
+  overrides: [
+    networkServiceProvider.overrideWithValue(network),
+    bluetoothServiceProvider.overrideWithValue(bluetooth),
+  ],
+  child: MaterialApp(
+    home: ShellTheme(
+      data: const ShellThemeData(),
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: SizedBox.fromSize(
+          size: size,
+          child: Center(
+            child: DockBluetoothPanelAnchor(
+              services: services,
+              coordinator: null,
+              child: Builder(
+                builder: (context) => GestureDetector(
+                  key: const ValueKey('bt.anchor.child'),
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () =>
+                      DockStatusPanelAnchorState.togglePanelOf(context),
+                  child: const SizedBox(
+                    width: 26,
+                    height: 26,
+                    child: ColoredBox(color: Color(0x00000000)),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      ),
+    ),
+  ),
+);
+
 Future<void> _settle(WidgetTester tester) async {
   await tester.pump();
   await tester.pump(const Duration(milliseconds: 300));
@@ -446,8 +493,10 @@ void main() {
         ),
       );
       await _settle(tester);
+      // KOS `trailingCells` 无独立蓝牙格（BarStatusArea.qml:28-33）；wifi 能力
+      // 缺失不挂格，controlcenter 恒显示（TASK-09 无能力门控）。
       expect(find.byType(DockWifiCell), findsNothing);
-      expect(find.byType(DockBluetoothCell), findsNothing);
+      expect(find.byType(DockControlCenterCell), findsOneWidget);
       expect(find.byType(DockTrayAccessory), findsOneWidget);
     });
 
@@ -466,8 +515,9 @@ void main() {
         ),
       );
       await _settle(tester);
+      // wifi + controlcenter 两格（无独立蓝牙格）；battery 无数据不挂。
       expect(find.byType(DockWifiCell), findsOneWidget);
-      expect(find.byType(DockBluetoothCell), findsOneWidget);
+      expect(find.byType(DockControlCenterCell), findsOneWidget);
       expect(find.byType(DockBatteryCell), findsNothing);
     });
   });
@@ -489,8 +539,9 @@ void main() {
         ),
       );
       await _settle(tester);
+      // wifi + controlcenter 两格计入（无独立蓝牙格）。
       expect(find.byType(DockWifiCell), findsOneWidget);
-      expect(find.byType(DockBluetoothCell), findsOneWidget);
+      expect(find.byType(DockControlCenterCell), findsOneWidget);
       // 内容宽 = 2*(6+26)=64（无托盘段）。
       expect(
         tester.getSize(find.byType(DockTrayAccessory)).width,
@@ -528,7 +579,7 @@ void main() {
       expect(find.byType(DockWifiPanel), findsNothing);
     });
 
-    testWidgets('wifi 面板开着时点蓝牙格 → wifi 收、蓝牙开（互斥）', (
+    testWidgets('wifi 面板开着时点控制中心格 → wifi 收、控制中心开（互斥）', (
       tester,
     ) async {
       await tester.pumpWidget(
@@ -547,18 +598,18 @@ void main() {
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.byType(DockWifiPanel), findsOneWidget);
-      // 开蓝牙面板 → 协调器收掉 wifi。注意：Overlay 单树模型下 fullScene
+      // 开控制中心 → 协调器收掉 wifi。注意：Overlay 单树模型下 fullScene
       // 屏障会先吃掉这次点击（KOS popup 是独立 surface、点击穿透到格
-      // 无法复刻——偏差记 deltas），点格先关 wifi、再点一次才开蓝牙。
-      await tester.tap(find.byType(DockBluetoothCell), warnIfMissed: false);
+      // 无法复刻——偏差记 deltas），点格先关 wifi、再点一次才开控制中心。
+      await tester.tap(find.byType(DockControlCenterCell), warnIfMissed: false);
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       expect(find.byType(DockWifiPanel), findsNothing);
-      expect(find.byType(DockBluetoothPanel), findsNothing);
-      await tester.tap(find.byType(DockBluetoothCell));
+      expect(find.byType(DockControlCenterPanel), findsNothing);
+      await tester.tap(find.byType(DockControlCenterCell));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
-      expect(find.byType(DockBluetoothPanel), findsOneWidget);
+      expect(find.byType(DockControlCenterPanel), findsOneWidget);
     });
   });
 
@@ -653,8 +704,11 @@ void main() {
       final bluetooth = _FakeBluetoothBackend(
         snapshot: bluetoothSnapshot(available: true, devices: [device]),
       );
+      // 蓝牙托盘格已删（KOS `trailingCells` 无 bluetooth）；面板入口改经
+      // `DockBluetoothPanelAnchor` 直接挂占位 child（面板内行点击逻辑与控制中心
+      // 蓝牙子页同源 `DockBluetoothDeviceListBody`，仍覆盖）。
       await tester.pumpWidget(
-        _wrapTray(
+        _wrapBluetoothAnchor(
           services: _FakeShellServices(),
           network: _FakeNetworkBackend(
             snapshot: networkSnapshot(wifiDeviceAvailable: false),
@@ -663,7 +717,7 @@ void main() {
         ),
       );
       await _settle(tester);
-      await tester.tap(find.byType(DockBluetoothCell));
+      await tester.tap(find.byKey(const ValueKey('bt.anchor.child')));
       await tester.pump();
       await tester.pump(const Duration(milliseconds: 200));
       expect(bluetooth.refreshCalls, 1);

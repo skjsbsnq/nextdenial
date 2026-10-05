@@ -41,8 +41,13 @@ import 'package:kos_dock/src/widgets/tray_accessory.dart';
 class _FakeNetworkBackend implements NetworkBackend {
   _FakeNetworkBackend({NetworkSnapshot? snapshot})
     : _snapshot = snapshot ?? const NetworkSnapshot.unavailable();
-  final NetworkSnapshot _snapshot;
+  NetworkSnapshot _snapshot;
   final _snapshots = StreamController<NetworkSnapshot>.broadcast();
+
+  void emit(NetworkSnapshot next) {
+    _snapshot = next;
+    _snapshots.add(next);
+  }
 
   int requestScanCalls = 0;
   final wireless = <bool>[];
@@ -1078,28 +1083,29 @@ void main() {
     expect(bridge.deviceRequests, greaterThan(beforeDevices));
   });
 
-  testWidgets('能力位翻转（蓝牙上线）不销毁已开面板（N1 固定 key）', (tester) async {
+  testWidgets('能力位翻转（wifi 上线）不销毁已开面板（N1 固定 key）', (tester) async {
     final bluetooth = _FakeBluetoothBackend(
       snapshot: bluetoothSnapshot(available: false),
+    );
+    final network = _FakeNetworkBackend(
+      snapshot: networkSnapshot(wifiDeviceAvailable: false),
     );
     await tester.pumpWidget(
       _wrapTray(
         services: _FakeShellServices(),
-        network: _FakeNetworkBackend(
-          snapshot: networkSnapshot(wifiDeviceAvailable: false),
-        ),
+        network: network,
         bluetooth: bluetooth,
         bridge: _FakeBridge(),
       ),
     );
     await _settle(tester);
     await _openPanel(tester);
-    // 蓝牙能力位上线：Row 内格数变化；无 key 时按下标复用 Element 会把
-    // 控制中心 anchor 卸掉 → 已开面板被销毁。
-    bluetooth.emit(bluetoothSnapshot(available: true));
+    // wifi 能力位上线（false→true）：Row 内格数变化；无 key 时按下标复用
+    // Element 会把控制中心 anchor 卸掉 → 已开面板被销毁。
+    network.emit(networkSnapshot(wifiDeviceAvailable: true));
     await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
-    expect(find.byType(DockBluetoothCell), findsOneWidget);
+    expect(find.byType(DockWifiCell), findsOneWidget);
     expect(find.byType(DockControlCenterPanel), findsOneWidget);
   });
 

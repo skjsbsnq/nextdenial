@@ -54,7 +54,7 @@ import 'package:denial_flutter_sdk/services.dart' show ShellServices;
 import 'package:denial_flutter_sdk/shell_theme.dart'
     show ShellTheme, ShellThemeBuildContext;
 import 'package:denial_flutter_sdk/state.dart'
-    show bluetoothProvider, networkConnectivityProvider;
+    show networkConnectivityProvider;
 import 'package:denial_flutter_sdk/surfaces.dart' show ShellSurfacePresentation;
 import 'package:denial_flutter_sdk/wallpaper.dart' show shellAccentProvider;
 import 'package:flutter/gestures.dart' show PointerHoverEvent;
@@ -234,17 +234,16 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     final trayIdCount = trayAccessory != null
         ? ref.watch(widget.services.trayItemIds).length
         : 0;
-    // 状态格计数与 `DockTrayAccessory` 内同源：wifi 看 `wifiDeviceAvailable`
-    // （KOS NetworkStatus.qml `visible: NetworkService.wifiAvailable`）、bt
-    // 看 `BluetoothState.available`（adapterPresent）、battery 看
-    // `capacity != null`、controlcenter（TASK-09）**恒显示 +1**（Flutter 侧
-    // 自绘面板，无系统能力门控）。
+    // 状态格计数与 `DockTrayAccessory` 内同源（KOS `trailingCells`，
+    // BarStatusArea.qml:28-33 = network/battery/settings/controlcenter；
+    // settings 无等价物隐藏、无独立蓝牙格）：wifi 看 `wifiDeviceAvailable`
+    // （KOS NetworkStatus.qml `visible: NetworkService.available`）、battery 看
+    // `capacity != null`、controlcenter（TASK-09）**恒显示 +1**。
     final statusCellCount = trayAccessory == null
         ? 0
         : (ref.watch(networkConnectivityProvider).snapshot.wifiDeviceAvailable
                   ? 1
                   : 0) +
-              (ref.watch(bluetoothProvider).available ? 1 : 0) +
               (ref.watch(widget.services.battery).capacity != null ? 1 : 0) +
               1;
     final trayItemCount = trayIdCount + statusCellCount;

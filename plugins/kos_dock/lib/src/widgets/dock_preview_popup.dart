@@ -617,12 +617,15 @@ class DockPreviewAnchorState extends State<DockPreviewAnchor>
                   height: height,
                   child: AnimatedBuilder(
                     animation: _reveal,
-                    builder: (context, child) {
+                    builder: (context, _) {
                       // KOS: dock/DockWindowPreview.qml:172-194 —
                       // opacity=reveal；scale=0.94+0.06·reveal（transformOrigin
                       // 底部）；y=(1−reveal)·7。revealProgress 已带 easing
                       // （入场 animateTo OutCubic / 退场 reverse InCubic /
                       // handoff forward 30ms），这里直接用 controller 值。
+                      // opacity 不套整只面板——backdrop 模糊会随透明度弱化
+                      // （「先透明再模糊」）；淡入改由 _DockPreviewPanel 内部
+                      // 只作用于前景（backdrop 第一帧即满强度）。
                       final reveal = _reveal.value;
                       return Transform.translate(
                         offset: Offset(0, (1 - reveal) * kDockPreviewSink),
@@ -631,37 +634,37 @@ class DockPreviewAnchorState extends State<DockPreviewAnchor>
                               kDockPreviewExitScale +
                               (1 - kDockPreviewExitScale) * reveal,
                           alignment: Alignment.bottomCenter,
-                          child: Opacity(opacity: reveal, child: child),
+                          child: _DockPreviewPanel(
+                            toolbarLabel: toolbarLabel,
+                            windows: widget.windows,
+                            services: services,
+                            progress: reveal,
+                            onNewWindow: widget.launchId == null
+                                ? null
+                                : () {
+                                    // KOS: dock/DockWindowPreview.qml:274-287 —
+                                    // launchNewWindow 后关 popup。
+                                    final id = widget.launchId!;
+                                    _dismissImmediately();
+                                    unawaited(
+                                      services.launchApplication(
+                                        id,
+                                        monitorId: widget.monitorId,
+                                      ),
+                                    );
+                                  },
+                            onCardEnter: _emphasis.enter,
+                            onCardExit: _emphasis.leave,
+                            onCardTap: (window) {
+                              // KOS: dock/DockWindowPreview.qml:512-515 —
+                              // activateWindow + 关 popup。
+                              _dismissImmediately();
+                              services.activateWindow(window.id);
+                            },
+                          ),
                         ),
                       );
                     },
-                    child: _DockPreviewPanel(
-                      toolbarLabel: toolbarLabel,
-                      windows: widget.windows,
-                      services: services,
-                      onNewWindow: widget.launchId == null
-                          ? null
-                          : () {
-                              // KOS: dock/DockWindowPreview.qml:274-287 —
-                              // launchNewWindow 后关 popup。
-                              final id = widget.launchId!;
-                              _dismissImmediately();
-                              unawaited(
-                                services.launchApplication(
-                                  id,
-                                  monitorId: widget.monitorId,
-                                ),
-                              );
-                            },
-                      onCardEnter: _emphasis.enter,
-                      onCardExit: _emphasis.leave,
-                      onCardTap: (window) {
-                        // KOS: dock/DockWindowPreview.qml:512-515 —
-                        // activateWindow + 关 popup。
-                        _dismissImmediately();
-                        services.activateWindow(window.id);
-                      },
-                    ),
                   ),
                 ),
               ),
@@ -741,6 +744,7 @@ class _DockPreviewPanel extends StatelessWidget {
     required this.onCardEnter,
     required this.onCardExit,
     required this.onCardTap,
+    this.progress = 1.0,
   });
 
   final String toolbarLabel;
@@ -753,6 +757,11 @@ class _DockPreviewPanel extends StatelessWidget {
   final void Function(int windowId) onCardExit;
   final void Function(ApplicationWindow window) onCardTap;
 
+  /// 显隐进度（0..1）：只淡前景（渐变+边框+内容），backdrop 模糊不吃
+  /// 淡入——外层 Opacity 套整只面板会把模糊层一起淡化（「先透明再模糊」）。
+  final double progress;
+
+
   @override
   Widget build(BuildContext context) {
     final theme = context.shellTheme;
@@ -764,18 +773,22 @@ class _DockPreviewPanel extends StatelessWidget {
       blur: theme.backdropBlurEnabled,
       separateChild: true,
       borderRadius: radius,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          gradient: theme.panelGradient(
-            colors.panelBackground,
-            colors.panelBackgroundBottom,
+      // backdrop 层不吃 [progress]——模糊从第一帧就满强度；Opacity 只套前景
+      // （渐变+边框+工具条/卡行），避免「先透明再模糊」。
+      child: Opacity(
+        opacity: progress,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            gradient: theme.panelGradient(
+              colors.panelBackground,
+              colors.panelBackgroundBottom,
+            ),
+            border: Border.all(color: colors.hairlineSoft),
           ),
-          border: Border.all(color: colors.hairlineSoft),
-        ),
-        child: ClipRRect(
-          borderRadius: radius,
-          child: Padding(
+          child: ClipRRect(
+            borderRadius: radius,
+            child: Padding(
             // KOS: dock/DockWindowPreview.qml:215 `anchors.margins:
             // rowPadding`（7px）+ Column spacing 2（:216）。
             padding: const EdgeInsets.all(kDockPreviewRowPadding),
@@ -838,6 +851,7 @@ class _DockPreviewPanel extends StatelessWidget {
             ),
           ),
         ),
+      ),
       ),
     );
   }
