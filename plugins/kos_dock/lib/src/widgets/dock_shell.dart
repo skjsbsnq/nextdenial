@@ -53,12 +53,15 @@ import 'package:denial_flutter_sdk/input.dart' show ShellInputRegion;
 import 'package:denial_flutter_sdk/services.dart' show ShellServices;
 import 'package:denial_flutter_sdk/shell_theme.dart'
     show ShellTheme, ShellThemeBuildContext;
-import 'package:denial_flutter_sdk/surfaces.dart'
-    show ShellSurfacePresentation;
+import 'package:denial_flutter_sdk/state.dart'
+    show bluetoothProvider, networkConnectivityProvider;
+import 'package:denial_flutter_sdk/surfaces.dart' show ShellSurfacePresentation;
 import 'package:denial_flutter_sdk/wallpaper.dart' show shellAccentProvider;
 import 'package:flutter/gestures.dart' show PointerHoverEvent;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+
+import 'dart:math' as math;
 
 import '../state/dock_row_entries.dart';
 import '../state/dock_settings.dart';
@@ -69,6 +72,7 @@ import 'dock_preview_popup.dart';
 import 'launcher_icon.dart';
 import 'magnification.dart';
 import 'trash_icon.dart';
+import 'tray_accessory.dart';
 
 /// Dock pill。主题/透明度全部接 `ShellTheme` 与
 /// `ShellSurfacePresentation`，无硬编码颜色；几何全部接
@@ -90,9 +94,13 @@ class KosDockShell extends ConsumerStatefulWidget {
   /// 信息卡区挂件构造器：`KosDockShell` 持有全 pill 唯一的
   /// [DockPopupCoordinator]，构建时注入给调用方（TASK-05 `DockInfoCarousel`
   /// 的详情 popup 走同一单例；KOS `DockModelService.activeDockPopup`）。
-  /// trayAccessory 为尾部托盘挂件（槽宽 = `metrics.iconSlotSize`）。
+  /// trayAccessory 为尾部托盘挂件（TASK-06 `DockTrayAccessory`：槽宽 =
+  /// `max(metrics.iconSlotSize, trayEstimateWidth)`，估算宽经
+  /// `DockMetrics.fromWidth(trayWidth:)` 回流进 dockWidth，见该件类注释）。
+  /// TASK-08 起与 `infoCard` 同式接收 popup 协调器——wifi/蓝牙状态格
+  /// 面板与图标预览/菜单互斥，共享全 pill 唯一 `DockPopupCoordinator`。
   final Widget Function(DockPopupCoordinator coordinator)? infoCard;
-  final Widget? trayAccessory;
+  final Widget Function(DockPopupCoordinator coordinator)? trayAccessory;
 
   @override
   ConsumerState<KosDockShell> createState() => _KosDockShellState();
@@ -161,7 +169,7 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     final pinnedCount = entries.where((entry) => entry.isPinned).length;
     final runningCount = entryCount - pinnedCount;
     final infoCard = widget.infoCard?.call(_popups);
-    final trayAccessory = widget.trayAccessory;
+    final trayAccessory = widget.trayAccessory?.call(_popups);
     // KOS `hasInfo = hasAvailableInfo && !hideInfoCarousel`
     // （DockContainer.qml:143）：`hasAvailableInfo` 由 `infoCardOrder` 与各卡
     // 数据可用性共同推导（`:46-58`）——clock/metrics 恒可用（metrics 无数据
@@ -201,8 +209,7 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     // 「按卡片集合收敛订阅」是移植期收敛，记 docs/visual-deltas.md TASK-05 节。
     // 挂 `KosDockShell` 的测试因此必须 override `dockWeatherProviderProvider`。
     final weatherGate =
-        prefsAsync.hasValue &&
-        dockInfoCardNeedsWeather(prefs.infoCardOrder);
+        prefsAsync.hasValue && dockInfoCardNeedsWeather(prefs.infoCardOrder);
     final weatherAvailable = weatherGate
         ? ref.watch(dockWeatherSnapshotProvider).value?.available ?? false
         : false;
@@ -218,15 +225,55 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
             _ => false,
           },
         );
-    final hasTray = trayAccessory != null;
+    // TASK-06 托盘估算宽（KOS `estimatedAccessoryWidth` 语义的回流，
+    // TASK-06/08 托盘估算宽（KOS `estimatedAccessoryWidth` 语义的回流，
+    // DockContainer.qml:111-133 预扣 + :954-959 `Loader.width =
+    // item.implicitWidth`）：托盘项数 + 状态格（wifi/bt/battery，能力缺失
+    // 隐藏）→ `dockTrayEstimateWidth`。只有 trayAccessory 挂载时才订阅这些
+    // provider（托盘源 tick 不应重建无托盘的 pill）。
+    final trayIdCount = trayAccessory != null
+        ? ref.watch(widget.services.trayItemIds).length
+        : 0;
+    // 状态格计数与 `DockTrayAccessory` 内同源：wifi 看 `wifiDeviceAvailable`
+    // （KOS NetworkStatus.qml `visible: NetworkService.wifiAvailable`）、bt
+    // 看 `BluetoothState.available`（adapterPresent）、battery 看
+    // `capacity != null`、controlcenter（TASK-09）**恒显示 +1**（Flutter 侧
+    // 自绘面板，无系统能力门控）。
+    final statusCellCount = trayAccessory == null
+        ? 0
+        : (ref.watch(networkConnectivityProvider).snapshot.wifiDeviceAvailable
+                  ? 1
+                  : 0) +
+              (ref.watch(bluetoothProvider).available ? 1 : 0) +
+              (ref.watch(widget.services.battery).capacity != null ? 1 : 0) +
+              1;
+    final trayItemCount = trayIdCount + statusCellCount;
+    // chicken-and-egg：折行判定的 availableHeight=dockHeight 依赖反解后的
+    // iconSize，而 iconSize 依赖含 trayWidth 的 dockWidth。先用基准 dock
+    // 高（kDockBaseHeight=60）做两行判定；最终反解后按真实 dockHeight
+    // 复算一次兜底（参考 hasInfo 探针范式——两行阈值翻转只发生在
+    // dockHeight≈52 即 iconSize≈37 的窄带，复算保证收敛）。
+    var trayTwoRows = dockTrayTwoRows(
+      itemCount: trayItemCount,
+      availableHeight: kDockBaseHeight,
+    );
+    var trayEstimateWidth = trayItemCount <= 0
+        ? 0.0
+        : dockTrayEstimateWidth(itemCount: trayIdCount, twoRows: trayTwoRows) +
+              statusCellCount * (kDockTrayIconSpacing + kDockTrayItemSize);
+    // hasTray 由估算宽推导：托盘 0 项且无状态格时 tray 槽与 divider3 整段
+    // 不渲染（KOS `trailingAccessoryDividerVisible` 同语义，
+    // DockContainer.qml:951）——不再留「trayAccessory 非 null 但内容空」的
+    // 孤立 divider3。
+    final hasTray = trayAccessory != null && trayEstimateWidth > 0;
 
     // ── 方案 C：KOS iconSize 反解（dock/AdaptiveMath.mjs:62-166 移植，
     //    DockMetrics.fromWidth 逐项对应）──
-    // 可用宽 = 条带宽（KOS `availableLength`；本端无动态 accessory 预留，
-    // DockContainer.qml:170 的 `max(baseHeight, availableLength −
-    // estimatedAccessoryWidth)` 只剩下限保护——fromWidth 内部
-    // maxWidth=width×0.98 已覆盖极窄输出）。cap 上限与 KOS 一致走
-    // `maxLengthRatio = 0.98`（AdaptiveMath.mjs:29-30）。
+    // 可用宽 = 条带宽（KOS `availableLength`；tray 估算宽经 trayWidth 参数
+    // 回流进 fromWidth 而非从 availableLength 预扣——KOS DockContainer.qml:
+    // 170 的 `max(baseHeight, availableLength − estimatedAccessoryWidth)`
+    // 是输出宽折让；本端把托盘宽计入 dockWidth 内部分，见 deltas）。cap
+    // 上限与 KOS 一致走 `maxLengthRatio = 0.98`（AdaptiveMath.mjs:29-30）。
     final stripWidth = MediaQuery.sizeOf(context).width;
     // KOS `_infoProbeLayout`（DockContainer.qml:127-137）：**带上 carousel**
     // 先反解一次当探针；探针 iconSize 掉到绝对下限 MIN_ICON_SIZE=18 时摘掉整
@@ -241,12 +288,13 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
       showTrash: showTrash,
       hasInfo: hasAvailableInfo,
       hasTray: hasTray,
+      trayWidth: trayEstimateWidth,
     );
     final hasInfo =
         hasAvailableInfo && probeMetrics.iconSize > kDockMinIconSize.toDouble();
     // 摘掉时按最终 hasInfo 重新反解（KOS `_layout` 用的就是最终 hasInfo）；
     // 未摘掉时探针即最终几何，直接复用。
-    final metrics = hasInfo == hasAvailableInfo
+    var metrics = hasInfo == hasAvailableInfo
         ? probeMetrics
         : DockMetrics.fromWidth(
             stripWidth,
@@ -256,7 +304,31 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
             showTrash: showTrash,
             hasInfo: hasInfo,
             hasTray: hasTray,
+            trayWidth: trayEstimateWidth,
           );
+    // 折行判定兜底：用最终 dockHeight 复算 twoRows（基准 60 的预判在
+    // dockHeight≈52 的窄带可能翻转），翻转时用真实 trayWidth 再反解一次
+    // metrics——只改 trayWidth 不动其余输入，收敛且最多多花一次 fromWidth。
+    final finalTwoRows = dockTrayTwoRows(
+      itemCount: trayItemCount,
+      availableHeight: metrics.dockHeight,
+    );
+    if (hasTray && finalTwoRows != trayTwoRows) {
+      trayTwoRows = finalTwoRows;
+      trayEstimateWidth =
+          dockTrayEstimateWidth(itemCount: trayIdCount, twoRows: trayTwoRows) +
+          statusCellCount * (kDockTrayIconSpacing + kDockTrayItemSize);
+      metrics = DockMetrics.fromWidth(
+        stripWidth,
+        pinnedCount: pinnedCount,
+        runningCount: runningCount,
+        showLauncher: showLauncher,
+        showTrash: showTrash,
+        hasInfo: hasInfo,
+        hasTray: hasTray,
+        trayWidth: trayEstimateWidth,
+      );
+    }
 
     // divider 可见性由 metrics 的同一组静态规则复算（KOS
     // DockContainer.qml:856,912,951 的 `visible:` 绑定；与 fromWidth 内部
@@ -296,110 +368,123 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
       child: Padding(
         padding: EdgeInsets.only(bottom: metrics.edgeMargin),
         child: ShellBackdropBlur(
-        blur: theme.backdropBlurEnabled,
-        // 前景不进 filter 层：glass 模式的 refraction/edge 光效不污染内容。
-        separateChild: true,
-        opacity: opacity,
-        borderRadius: borderRadius,
-        child: ShellInputRegion(
-          debugLabel: 'KOS Dock pill',
-          // 矩形输入区罩住整个 pill；KOS squircle 输入形状以更紧的非矩形
-          // 区近似为矩形（偏差记 docs/visual-deltas.md）。
-          child: SizedBox(
-            width: metrics.dockWidth,
-            height: metrics.dockHeight,
-            // DecoratedBox 画在 tight SizedBox 内侧——若用带 border 的
-            // Container，hairline 边宽会把内容区再内推 2px 造成 Row 溢出。
-            child: DecoratedBox(
-              decoration: BoxDecoration(
-                borderRadius: borderRadius,
-                gradient: theme.panelGradient(
-                  accent.cardFillTop(theme),
-                  accent.cardFill(theme),
+          blur: theme.backdropBlurEnabled,
+          // 前景不进 filter 层：glass 模式的 refraction/edge 光效不污染内容。
+          separateChild: true,
+          opacity: opacity,
+          borderRadius: borderRadius,
+          child: ShellInputRegion(
+            debugLabel: 'KOS Dock pill',
+            // 矩形输入区罩住整个 pill；KOS squircle 输入形状以更紧的非矩形
+            // 区近似为矩形（偏差记 docs/visual-deltas.md）。
+            child: SizedBox(
+              width: metrics.dockWidth,
+              height: metrics.dockHeight,
+              // DecoratedBox 画在 tight SizedBox 内侧——若用带 border 的
+              // Container，hairline 边宽会把内容区再内推 2px 造成 Row 溢出。
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: borderRadius,
+                  gradient: theme.panelGradient(
+                    accent.cardFillTop(theme),
+                    accent.cardFill(theme),
+                  ),
+                  // KOS: dock/DockDivider.qml:16 — divider 色走语义 hairline，
+                  // 不在此硬编码；hairline 边线给玻璃一个收敛边缘。
+                  border: Border.all(color: colors.hairlineSoft),
                 ),
-                // KOS: dock/DockDivider.qml:16 — divider 色走语义 hairline，
-                // 不在此硬编码；hairline 边线给玻璃一个收敛边缘。
-                border: Border.all(color: colors.hairlineSoft),
-              ),
-              child: MouseRegion(
-                key: _pointerRegionKey,
-                onHover: _broadcastPointer,
-                onExit: (_) => _pointerX.value = null,
-                child: MagnificationPointer(
-                  pointerX: _pointerX,
-                  child: DockMetricsScope(
-                    metrics: metrics,
-                    child: Padding(
-                      // hpad = round(iconSize*0.4)，随 iconSize 反解
-                      // （KOS: AdaptiveMath.mjs:12,143）。
-                      padding: EdgeInsets.symmetric(
-                        horizontal: metrics.hPadding,
-                      ),
-                      child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.center,
-                        // 每个槽位固定 key（见上方注释）：槽位显隐变化时按
-                        // key 匹配 Element，避免后一位子树被重建（入场动画
-                        // 重播 / 状态丢失）。
-                        children: [
-                          // KOS: dock/DockContainer.qml:496-962 Row 顺序：
-                          // launcher → trash → pinned段 → divider1 → 运行段 →
-                          // divider2 → info → divider3 → trailingAccessory。
-                          // divider1(launchers|windows) 与运行段都在图标区
-                          // 内部（DockIconRow 的 rowChildren），此处只见
-                          // `dock.pinned` 一个图标区槽位。
-                          if (showLauncher)
-                            LauncherIcon(
-                              key: const ValueKey<String>('dock.launcher'),
-                              services: widget.services,
-                              coordinator: _popups,
-                            ),
-                          if (showTrash)
-                            TrashIcon(
-                              key: const ValueKey<String>('dock.trash'),
-                              services: widget.services,
-                              monitorId: widget.monitorId,
-                              coordinator: _popups,
-                            ),
-                          // 图标区槽位取反解后的自然宽（方案 C 起恒 ≤
-                          // 预算，不再 clamp/滚动）：n*(slot+spacing)−spacing
-                          // + （两段都非空时 +divider1 槽宽）——与
-                          // `DockMetrics.fromWidth` 的 iconUnits/divider
-                          // 计数同式；DockIconRow 内部 Center 撑满约束。
-                          SizedBox(
-                            key: const ValueKey<String>('dock.pinned'),
-                            width: _iconRowWidth(
-                              metrics,
-                              entryCount: entryCount,
-                              divider1: DockMetrics.divider1Visible(
-                                pinnedCount: pinnedCount,
-                                runningCount: runningCount,
+                child: MouseRegion(
+                  key: _pointerRegionKey,
+                  onHover: _broadcastPointer,
+                  onExit: (_) => _pointerX.value = null,
+                  child: MagnificationPointer(
+                    pointerX: _pointerX,
+                    child: DockMetricsScope(
+                      metrics: metrics,
+                      child: Padding(
+                        // hpad = round(iconSize*0.4)，随 iconSize 反解
+                        // （KOS: AdaptiveMath.mjs:12,143）。
+                        padding: EdgeInsets.symmetric(
+                          horizontal: metrics.hPadding,
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.center,
+                          // 每个槽位固定 key（见上方注释）：槽位显隐变化时按
+                          // key 匹配 Element，避免后一位子树被重建（入场动画
+                          // 重播 / 状态丢失）。
+                          children: [
+                            // KOS: dock/DockContainer.qml:496-962 Row 顺序：
+                            // launcher → trash → pinned段 → divider1 → 运行段 →
+                            // divider2 → info → divider3 → trailingAccessory。
+                            // divider1(launchers|windows) 与运行段都在图标区
+                            // 内部（DockIconRow 的 rowChildren），此处只见
+                            // `dock.pinned` 一个图标区槽位。
+                            if (showLauncher)
+                              LauncherIcon(
+                                key: const ValueKey<String>('dock.launcher'),
+                                services: widget.services,
+                                coordinator: _popups,
+                              ),
+                            if (showTrash)
+                              TrashIcon(
+                                key: const ValueKey<String>('dock.trash'),
+                                services: widget.services,
+                                monitorId: widget.monitorId,
+                                coordinator: _popups,
+                              ),
+                            // 图标区槽位取反解后的自然宽（方案 C 起恒 ≤
+                            // 预算，不再 clamp/滚动）：n*(slot+spacing)−spacing
+                            // + （两段都非空时 +divider1 槽宽）——与
+                            // `DockMetrics.fromWidth` 的 iconUnits/divider
+                            // 计数同式；DockIconRow 内部 Center 撑满约束。
+                            SizedBox(
+                              key: const ValueKey<String>('dock.pinned'),
+                              width: _iconRowWidth(
+                                metrics,
+                                entryCount: entryCount,
+                                divider1: DockMetrics.divider1Visible(
+                                  pinnedCount: pinnedCount,
+                                  runningCount: runningCount,
+                                ),
+                              ),
+                              child: DockIconRow(
+                                monitorId: widget.monitorId,
+                                services: widget.services,
+                                coordinator: _popups,
                               ),
                             ),
-                            child: DockIconRow(
-                              monitorId: widget.monitorId,
-                              services: widget.services,
-                              coordinator: _popups,
-                            ),
-                          ),
-                          if (divider2)
-                            const DockDivider(
-                              key: ValueKey<String>('dock.divider.info'),
-                            ),
-                          if (hasInfo)
-                            KeyedSubtree(
-                              key: const ValueKey<String>('dock.infoCard'),
-                              child: infoCard,
-                            ),
-                          if (divider3)
-                            const DockDivider(
-                              key: ValueKey<String>('dock.divider.tray'),
-                            ),
-                          if (hasTray)
-                            KeyedSubtree(
-                              key: const ValueKey<String>('dock.tray'),
-                              child: trayAccessory,
-                            ),
-                        ],
+                            if (divider2)
+                              const DockDivider(
+                                key: ValueKey<String>('dock.divider.info'),
+                              ),
+                            if (hasInfo)
+                              KeyedSubtree(
+                                key: const ValueKey<String>('dock.infoCard'),
+                                child: infoCard,
+                              ),
+                            if (divider3)
+                              const DockDivider(
+                                key: ValueKey<String>('dock.divider.tray'),
+                              ),
+                            if (hasTray)
+                              // 托盘真实槽宽 = max(iconSlotSize, 估算内容宽)
+                              // （KOS `Loader.width = item.implicitWidth`
+                              // 参与 Row 自然宽等价，DockContainer.qml:
+                              // 954-959）；trayWidth 已回流进 dockWidth，
+                              // 内容右对齐排在槽内、不外延不遮相邻槽位。
+                              // DockTrayAccessory 缺省 trayWidth 时内部同式
+                              // 重算槽宽，与本槽同宽不漂移。
+                              SizedBox(
+                                key: const ValueKey<String>('dock.tray'),
+                                width: math.max(
+                                  metrics.iconSlotSize,
+                                  trayEstimateWidth,
+                                ),
+                                height: metrics.dockHeight,
+                                child: trayAccessory,
+                              ),
+                          ],
+                        ),
                       ),
                     ),
                   ),
@@ -408,7 +493,6 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
             ),
           ),
         ),
-      ),
       ),
     );
   }
@@ -423,10 +507,9 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     DockMetrics metrics, {
     required int entryCount,
     required bool divider1,
-  }) =>
-      entryCount <= 0
-          ? 0.0
-          : entryCount * (metrics.iconSlotSize + metrics.itemSpacing) -
-              metrics.itemSpacing +
-              (divider1 ? metrics.dividerSlotWidth : 0.0);
+  }) => entryCount <= 0
+      ? 0.0
+      : entryCount * (metrics.iconSlotSize + metrics.itemSpacing) -
+            metrics.itemSpacing +
+            (divider1 ? metrics.dividerSlotWidth : 0.0);
 }

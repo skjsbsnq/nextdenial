@@ -5,9 +5,10 @@ import 'package:denial_flutter_sdk/surfaces.dart';
 import 'package:denial_sdk/composition.dart';
 import 'package:flutter/widgets.dart';
 
-import 'src/theme/dock_tokens.dart' show DockMetrics, DockMetricsScope, kDockBaseHeight;
+import 'src/theme/dock_tokens.dart' show DockMetrics, kDockBaseHeight;
 import 'src/widgets/dock_shell.dart';
 import 'src/widgets/info_carousel.dart';
+import 'src/widgets/tray_accessory.dart';
 
 /// KOS Dock 表面（`ShellSurface`）：macOS-style 融合 Dock 容器（TASK-02）。
 ///
@@ -130,31 +131,22 @@ final class KosDockPlugin implements ShellSurface {
         // `KosDockShell` 构建时把全 pill 唯一的 `DockPopupCoordinator`
         // 注入（详情 popup 与图标预览/菜单共享单例语义）。carousel 内部
         // 从 `DockMetricsScope` 读反解几何（此处 build 拿不到 Inherited
-        // 上下文）。tray 仍为占位槽（TASK-06 接线）。
+        // 上下文）。
+        // TASK-06：tray 槽挂 `DockTrayAccessory`（宿主 buildSystemTray +
+        // battery 状态格；托盘项菜单/激活由宿主全权渲染）。
+        // TASK-08：tray 槽追加 wifi/bt 状态格（在 battery 之前），与
+        // `infoCard` 同式接收 popup 协调器——wifi/蓝牙面板的弹出与图标
+        // 预览/菜单互斥，共享全 pill 唯一 `DockPopupCoordinator`。
         infoCard: (coordinator) => DockInfoCarousel(
           services: surface.services,
           monitorId: surface.environment.output.monitorId,
           coordinator: coordinator,
         ),
-        trayAccessory: const _TraySlot(),
+        trayAccessory: (coordinator) => DockTrayAccessory(
+          services: surface.services,
+          coordinator: coordinator,
+        ),
       );
-}
-
-/// 托盘占位槽：尺寸 = metrics 的 icon slot 方槽（方案 C 起随
-/// `DockMetricsScope` 反解缩放；kos_dock.dart 的 build() 拿不到
-/// InheritedWidget 上下文，故透传一个读 scope 的件）。info 槽 TASK-05 起
-/// 由 `DockInfoCarousel` 填充，不再需要占位。
-class _TraySlot extends StatelessWidget {
-  const _TraySlot();
-
-  @override
-  Widget build(BuildContext context) {
-    final metrics = DockMetricsScope.of(context);
-    return SizedBox(
-      width: metrics.iconSlotSize,
-      height: metrics.iconSlotSize,
-    );
-  }
 }
 
 /// 底部工作区预留（`ShellWorkArea`）：最大化窗口停在 dock 之上，永不被 dock

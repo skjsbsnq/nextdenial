@@ -249,10 +249,11 @@ const double kDockDividerCapRadius = 999;
 /// `DockControlIcon`（同 slot/gap 几何），KOS 中它们由 pinnedRepeater 之外
 /// 的固定 DockIcon 实例承担、同样计入 Row 链与 itemSpacing——故在反解里按
 /// app icon 处理（计入 appIconCount 与 iconUnits）。tray 槽位是
-/// `trailingAccessory`，KOS 经 `estimatedAccessoryWidth` 从可用宽预扣
-/// （DockContainer.qml:124-133 `accessoryCount * baseHeight * 0.60`）；
-/// 我方托盘槽固定 1 个 icon slot，按 1 个 icon unit + 2×gap 计入——两式
-/// 不同（KOS 预扣是配件预留非 iconSize 函数），记 docs/visual-deltas.md。
+/// `trailingAccessory`：KOS 经 `estimatedAccessoryWidth` 从可用宽预扣
+/// （DockContainer.qml:124-133 `accessoryCount * baseHeight * 0.60`）且
+/// `Loader.width = item.implicitWidth` 参与 Row 自然宽（:954-959）；我方
+/// 等价回流——槽位按 1 个 icon unit 计入（保底 iconSlotSize），`trayWidth`
+/// 估算宽超出槽宽的部分以固定 px 计入 dockWidth（见 [fromWidth]）。
 /// info 槽宽 = infoUnits(4) × iconSize，无 activeBackgroundGap（KOS
 /// DockInfoCarousel 非 DockIcon、无激活底斑槽——但 :117 的
 /// `(hasInfoSlot?1:0)` 项为它额外计了 1 个 gap 对，照原式移植）。
@@ -388,6 +389,12 @@ final class DockMetrics {
   ///   showLauncher/showTrash`，DockContainer.qml:532,571 `visible:`）；
   /// - [hasInfo]/[hasTray]：info/tray 槽位出现（divider2/3 可见性由此与
   ///   条目数推导，见 [divider1Visible]/[divider2Visible]/[divider3Visible]）；
+  /// - [trayWidth]：tray 槽估算内容宽（px，KOS `estimatedAccessoryWidth`
+  ///   的等价回流，DockContainer.qml:111-133 预扣 + :954-959
+  ///   `Loader.width = item.implicitWidth`）。槽位仍按 1 个 icon unit 计入
+  ///   （保底 iconSlotSize），估算宽超出 iconSlotSize 的部分当固定
+  ///   overhead 加进 `contentWidth`/`renderedWidth`/`dockWidth`——托盘内容
+  ///   在 pill 内占真实槽宽，不再向左外延遮 divider3/info；
   /// - [infoUnits]：info 槽方格数（KOS `infoUnitsOverride`，
   ///   DockContainer.qml:159-160 非 expanded 取 4）。
   ///
@@ -403,40 +410,39 @@ final class DockMetrics {
     bool showTrash = true,
     bool hasInfo = false,
     bool hasTray = false,
+    double trayWidth = 0,
     double infoUnits = kDockInfoUnitsValue,
     double maxLengthRatio = kDockMaxWidthRatio,
   }) {
     final maxWidth = availableWidth * maxLengthRatio;
 
     // KOS: dock/AdaptiveMath.mjs:82-94 — infoUnits/dividerCount/itemCount。
-    final effInfoUnits =
-        hasInfo && infoUnits.isFinite ? math.max(0.0, infoUnits) : 0.0;
+    final effInfoUnits = hasInfo && infoUnits.isFinite
+        ? math.max(0.0, infoUnits)
+        : 0.0;
     // divider1(pinned|windows) + divider2(windows|info)（KOS :88-89）+
     // divider3(info|tray)（我方扩展，规则同 DockContainer.qml:951）。
     final dividerCount =
-        (divider1Visible(
-          pinnedCount: pinnedCount,
-          runningCount: runningCount,
-        )
-        ? 1
-        : 0) +
+        (divider1Visible(pinnedCount: pinnedCount, runningCount: runningCount)
+            ? 1
+            : 0) +
         (divider2Visible(
-          hasInfo: hasInfo,
-          pinnedCount: pinnedCount,
-          runningCount: runningCount,
-        )
-        ? 1
-        : 0) +
+              hasInfo: hasInfo,
+              pinnedCount: pinnedCount,
+              runningCount: runningCount,
+            )
+            ? 1
+            : 0) +
         (divider3Visible(
-          hasTray: hasTray,
-          hasInfo: hasInfo,
-          showLauncher: showLauncher,
-          showTrash: showTrash,
-          pinnedCount: pinnedCount,
-          runningCount: runningCount,
-        )
-        ? 1
-        : 0);
+              hasTray: hasTray,
+              hasInfo: hasInfo,
+              showLauncher: showLauncher,
+              showTrash: showTrash,
+              pinnedCount: pinnedCount,
+              runningCount: runningCount,
+            )
+            ? 1
+            : 0);
 
     // appIconCount：KOS = pinnedCount + windowCount；我方加 launcher/trash/
     // tray（同规格图标槽位，见类注释映射）。
@@ -481,18 +487,27 @@ final class DockMetrics {
     // 851,910,949 `dividerWidth: 2`），按 2 计入（+dividerCount px 的偏差
     // 记 docs/visual-deltas.md）。
     final fixedOverhead = dividerCount * kDockDividerWidth;
+    // tray 槽回流（KOS `estimatedAccessoryWidth` 预扣 + `Loader.width =
+    // item.implicitWidth` 的等价，DockContainer.qml:111-133,954-959）：槽位
+    // 已按 1 个 icon unit 计入 appIconCount（保底 iconSlotSize），估算内容
+    // 宽超出槽宽的部分以固定 px 计入——tray 真实宽参与 dockWidth，托盘内容
+    // 不向左外延遮相邻槽位。iconSize 未知时用基准槽宽（iconSize+gap×2，
+    // DockIcon.qml:116 按 baseIconSize 代值）保守折算。
+    final traySlotBase =
+        kDockIconSize + 2 * (kDockIconSize * kDockActiveBackgroundGapRatio);
+    final trayOverflowPx = hasTray
+        ? math.max(0.0, trayWidth - traySlotBase)
+        : 0.0;
 
     // KOS: dock/AdaptiveMath.mjs:124-138 — 反解 + clamp。
     const baseIconSize = kDockIconSize;
     var iconSize =
-        (baseIconSize * scaleFactor + fixedOverhead <= maxWidth
+        (baseIconSize * scaleFactor + fixedOverhead + trayOverflowPx <= maxWidth
                 ? baseIconSize.floor()
-                : ((maxWidth - fixedOverhead) / scaleFactor).floor())
+                : ((maxWidth - fixedOverhead - trayOverflowPx) / scaleFactor)
+                      .floor())
             .toDouble();
-    iconSize = iconSize.clamp(
-      kDockMinIconSize.toDouble(),
-      maxIconSize,
-    );
+    iconSize = iconSize.clamp(kDockMinIconSize.toDouble(), maxIconSize);
 
     // KOS: dock/AdaptiveMath.mjs:140-150 — 一切由 iconSize 派生。
     final dockHeight = (iconSize * (1 + 2 * kDockVerticalPaddingRatio))
@@ -502,24 +517,33 @@ final class DockMetrics {
     final vPadding = (iconSize * kDockVerticalPaddingRatio).roundToDouble();
     final dividerMargin = (iconSize * kDockDividerMarginRatio).roundToDouble();
     final pillRadius = (dockHeight * kDockPillRadiusRatio).roundToDouble();
-    final contentWidth = iconSize * scaleFactor + fixedOverhead;
+    final contentWidth =
+        iconSize * scaleFactor + fixedOverhead + trayOverflowPx;
     final activeBackgroundGap = iconSize * kDockActiveBackgroundGapRatio;
+    // 渲染时 tray 槽真实宽 = max(iconSlotSize, trayWidth)；dockWidth 必须
+    // 至少包住它——按真实槽宽再折算一次超出部分（iconSize 已知，比反解段
+    // 的 traySlotBase 基准折算更准）。
+    final trayRenderedOverflow = hasTray
+        ? math.max(0.0, trayWidth - (iconSize + activeBackgroundGap * 2))
+        : 0.0;
     // dockWidth 必须包住**真实渲染宽**：:148-149 的 contentWidth 用未取整
     // 比例估计，而布局实际用 round 过的 itemSpacing/hPadding/dividerMargin
     // （上方 :141-145 同式取整）——取整方向上界使渲染宽最多比估计宽出 ~1px
     // （800 宽 2 pinned 实测溢出 0.62px → RenderFlex overflow 硬失败）。
     // 按真实几何取 max 再 clamp 到 maxWidth（KOS 同处差异 <1px，记
     // docs/visual-deltas.md）。渲染宽 = 2*hpad + 全 app 图标槽 + pinned/
-    // running 段内间距 + divider 槽 + info 槽（outer Row 槽位间无
-    // itemSpacing——间距只烘进 pinned/running 条目之间与 divider margin）。
-    final renderedWidth = hPadding * 2 +
+    // running 段内间距 + divider 槽 + info 槽 + tray 真实宽超出 1 icon
+    // unit 的部分（outer Row 槽位间无 itemSpacing——间距只烘进
+    // pinned/running 条目之间与 divider margin）。
+    final renderedWidth =
+        hPadding * 2 +
         appIconCount * (iconSize + activeBackgroundGap * 2) +
         (math.max(0, pinnedCount - 1) + math.max(0, runningCount - 1)) *
             itemSpacing +
         dividerCount * (kDockDividerWidth + dividerMargin * 2) +
-        effInfoUnits * iconSize;
-    final dockWidth =
-        math.min(math.max(contentWidth, renderedWidth), maxWidth);
+        effInfoUnits * iconSize +
+        trayRenderedOverflow;
+    final dockWidth = math.min(math.max(contentWidth, renderedWidth), maxWidth);
 
     return DockMetrics._(
       iconSize: iconSize,
@@ -572,10 +596,7 @@ final class DockMetrics {
     required int runningCount,
   }) =>
       hasTray &&
-      (hasInfo ||
-          showLauncher ||
-          showTrash ||
-          pinnedCount + runningCount > 0);
+      (hasInfo || showLauncher || showTrash || pinnedCount + runningCount > 0);
 
   // KosDockShell.build 每次新建 metrics——值相等时不能让
   // DockMetricsScope.updateShouldNotify 引用比较恒为 true 而全量重建
@@ -631,15 +652,12 @@ class DockMetricsScope extends InheritedWidget {
 
   /// 当前 metrics；无 scope 时返回基准 fallback（见类注释）。
   static DockMetrics of(BuildContext context) =>
-      context
-          .dependOnInheritedWidgetOfExactType<DockMetricsScope>()
-          ?.metrics ??
+      context.dependOnInheritedWidgetOfExactType<DockMetricsScope>()?.metrics ??
       fallback;
 
   /// 最近 scope；无祖先时 null（`dependOn` 语义同上）。
-  static DockMetrics? maybeOf(BuildContext context) => context
-      .dependOnInheritedWidgetOfExactType<DockMetricsScope>()
-      ?.metrics;
+  static DockMetrics? maybeOf(BuildContext context) =>
+      context.dependOnInheritedWidgetOfExactType<DockMetricsScope>()?.metrics;
 
   /// 独立宿主回退：基准 metrics（iconSize=floor(42.857)=42、dockHeight=59
   /// ……），与旧编译期常量同量级。
@@ -1068,3 +1086,614 @@ const int kDockMetricsRingStorageColor = 0xff64d2ff;
 ///
 /// KOS: dock/DockTemperatureWidget.qml:115,117 温度行 accent 点。
 const int kDockMetricsTempPeakColor = 0xffff6b62;
+
+// ── TASK-06 托盘区（trailing accessory：托盘项 + 状态格） ────────────────
+
+/// 托盘内图标边长（px）：KOS dockHosted 实例 `SysTray.iconSize: 18`
+/// （BarStatusArea.qml:221-227）；宿主 `buildSystemTray` 实际画 22px 按钮，
+/// 本常量只作为 itemSize 的 KOS 主源参与推导。
+///
+/// KOS: bar/SysTray.qml:12 — `iconSize: 18`。
+const double kDockTrayIconSize = 18;
+
+/// 托盘格边长（px）：KOS `SysTray.itemSize = iconSize + 8 = 26`
+/// （估宽与格体槽宽共用）。
+///
+/// KOS: bar/SysTray.qml:32 — `itemSize: iconSize + 8`。
+const double kDockTrayItemSize = kDockTrayIconSize + 8;
+
+/// 托盘格间距（px）：KOS `SysTray.iconSpacing`（格间 + 换行列距共用）。
+///
+/// KOS: bar/SysTray.qml:13 — `iconSpacing: 6`；宿主 wrap 实现固定
+/// spacing/runSpacing=8，折行时的间距偏差记 docs/visual-deltas.md。
+const double kDockTrayIconSpacing = 6;
+
+/// 折两行判定需要的可用高（px）：`itemSize * 2 = 52`。
+///
+/// KOS: bar/SysTray.qml:74-77 — `twoRowThreshold: itemSize * 2`、
+/// `twoRows: dockHosted && itemCount > 1 && availableHeight >= twoRowThreshold`。
+const double kDockTrayTwoRowThreshold = kDockTrayItemSize * 2;
+
+/// 状态格内图标边长（px）：`systemTray.iconSize + 3 = 21`（network/battery 等
+/// 细线格在共享托盘格内多给 3px 空间）——不做常量：格体槽宽 = `kDockTrayItemSize`
+/// （KOS `SysTray.qml:503-504` `width: slotWidth`），图标 21px 数值只出现在
+/// 电量格外框推导注释里。
+///
+/// KOS: bar/BarStatusArea.qml:115,144 — `iconSize: systemTray.iconSize + 3`。
+
+/// 电量格外框宽/高（px）：`max(12, iconSize-2) × max(8, round(iconSize*0.56))`
+/// → 19×12（iconSize 为格内图标边长 21）。
+///
+/// KOS: bar/Battery.qml:43-44 — outline `width: Math.max(12, iconSize - 2)`、
+/// `height: Math.max(8, Math.round(iconSize * 0.56))`。
+const double kDockBatteryOutlineWidth = 19;
+const double kDockBatteryOutlineHeight = 12;
+
+/// 电量格外框圆角 / 描边宽（px）。
+///
+/// KOS: bar/Battery.qml:45,48 — `radius: 3`、`border.width: 1.5`。
+const double kDockBatteryOutlineRadius = 3;
+const double kDockBatteryOutlineBorder = 1.5;
+
+/// 电量格电极宽/高与圆角（px）：`max(1.5, iconSize-outline.width)` ×
+/// `max(3, iconSize*0.20)`，radius 1 → 2×4.2。
+///
+/// KOS: bar/Battery.qml:58-60。
+const double kDockBatteryTipWidth = 2;
+const double kDockBatteryTipHeight = 4.2;
+const double kDockBatteryTipRadius = 1;
+
+/// 电量格填充内缩/最小宽/圆角（px）：leftMargin 2、填充 `max(2,
+/// (outline.width-4)*level)` × `outline.height-4`，radius 2。
+///
+/// KOS: bar/Battery.qml:64-76。
+const double kDockBatteryFillInset = 2;
+const double kDockBatteryFillMinWidth = 2;
+const double kDockBatteryFillRadius = 2;
+
+/// 充电「⚡」字号（px）：`max(7, iconSize*0.44)` ≈ 9.24。
+///
+/// KOS: bar/Battery.qml:78-84 — `font.pixelSize: Math.max(7, iconSize*0.44)`。
+const double kDockBatteryBoltFontSize = 9.24;
+
+/// 电量格状态色阈值：fillColor 分档 >95 / ≥50 / ≥15 / <15。
+///
+/// KOS: bar/Battery.qml:111-121 — `percent > 95 ? #30d158 : >= 50 ? 前景
+/// : >= 15 ? #ff9f0a : #ff453a`；本端按 CONSTRAINTS §3 映射语义色
+/// （accent/textPrimary/performanceWarning/performanceBad）。
+const int kDockBatteryFullThreshold = 95;
+const int kDockBatteryMidThreshold = 50;
+const int kDockBatteryLowThreshold = 15;
+
+// ── TASK-08 托盘 Wi-Fi / 蓝牙状态格 + 弹层面板 ──────────────────────────
+
+/// Wi-Fi/蓝牙格内图标边长（px）：KOS `NetworkStatus.qml` 格内 `iconSize: 18`
+/// （格点击面 23×20，本端格体槽宽仍走 [kDockTrayItemSize] 26 与托盘格一致）。
+///
+/// KOS: bar/NetworkStatus.qml:19 — `iconSize: 18`。
+const double kDockStatusCellIconSize = 18;
+
+/// Wi-Fi 格 busy 态降透明度：KOS toggle 进行中 opacity .55（开关球同值）。
+///
+/// KOS: bar/NetworkPanel.qml:269,286 — `wifiToggleInProgress → opacity .55`。
+const double kDockWifiBusyOpacity = 0.55;
+
+/// Wi-Fi 格图标透明度（无 busy）：KOS `statusIconOpacity × (connected ? 0.96
+/// : 0.68)`（`statusIconOpacity` 属 IconAppearanceService，本端恒 1）。
+///
+/// KOS: bar/NetworkStatus.qml:65。
+const double kDockWifiCellConnectedAlpha = 0.96;
+const double kDockWifiCellIdleAlpha = 0.68;
+
+/// WifiSignalIcon 底层全弧 alpha（enabled 0.22 / disabled 0.16）。
+///
+/// KOS: bar/WifiSignalIcon.qml:51 — `wifiEnabled ? 0.22 : 0.16`。
+const double kDockWifiGlyphBaseAlphaOn = 0.22;
+const double kDockWifiGlyphBaseAlphaOff = 0.16;
+
+/// WifiSignalIcon 顶层点亮 alpha（connected 1.0 / 未连接 0.52）。
+///
+/// KOS: bar/WifiSignalIcon.qml:57-58。
+const double kDockWifiGlyphLitAlpha = 1.0;
+const double kDockWifiGlyphTopAlpha = 0.52;
+
+/// WifiSignalIcon 关闭斜杠 alpha 与 20px 逻辑画布线宽。
+///
+/// KOS: bar/WifiSignalIcon.qml:16（`lineWidth: 1.55`）,:65（斜线 .72）。
+const double kDockWifiGlyphSlashAlpha = 0.72;
+const double kDockWifiGlyphLineWidth = 1.55;
+
+/// WifiSignalIcon 格图标分档阈值：<30→1 弧、<60→2 弧、≥60→3 弧。
+///
+/// KOS: bar/WifiSignalIcon.qml:17-19。
+const int kDockWifiLevel1Max = 30;
+const int kDockWifiLevel2Max = 60;
+
+/// Wi-Fi 面板行内信号弧分档阈值：<25→1 弧、<50→2 弧、≥50→3 弧（**与格图标
+/// 档 <30/<60 不同**，勿混用 [kDockWifiLevel1Max]/[kDockWifiLevel2Max]）。
+///
+/// KOS: bar/NetworkPanel.qml:454-455 — `signalStrength < 25 ? 1 :
+/// (signalStrength < 50 ? 2 : 3)`。
+const int kDockWifiRowLevel1Max = 25;
+const int kDockWifiRowLevel2Max = 50;
+
+/// Wi-Fi 面板宽/高/圆角（px，KOS squircle r19 退化 circular）。
+///
+/// KOS: bar/NetworkPanel.qml:36-38（310×365）、:213（LiquidGlassPanel
+/// radius 19）、:69（blurRadius = clamp(1,19,155) = 19）。
+const double kDockWifiPanelWidth = 310;
+const double kDockWifiPanelHeight = 365;
+const double kDockWifiPanelRadius = 19;
+
+/// 蓝牙面板宽/高/圆角（px，KOS squircle r20 退化 circular）。
+///
+/// KOS: bar/BluetoothPanel.qml:19-20（300×340）、:91（radius 20）、
+/// :47（blurRadius = clamp(1,20,150) = 20）。
+const double kDockBluetoothPanelWidth = 300;
+const double kDockBluetoothPanelHeight = 340;
+const double kDockBluetoothPanelRadius = 20;
+
+/// 面板与格间距（px）：bottom dock `margins.top` 负值上推 —— Wi-Fi −8、
+/// 蓝牙 −6；tooltip 同蓝牙 −6。
+///
+/// KOS: bar/NetworkPanel.qml:54-55（-8）、bar/BluetoothPanel.qml:31-34（-6）、
+/// bar/StatusTooltip.qml:35（-6）。
+const double kDockWifiPanelGap = 8;
+const double kDockBluetoothPanelGap = 6;
+const double kDockStatusTooltipGap = 6;
+
+/// 面板内容外边距/列表内边距（px）：KOS Column `anchors.margins: 10`、
+/// ListView `left/right/top 8, bottom 0`、行 spacing 2。
+///
+/// KOS: bar/NetworkPanel.qml:226-229,412-417；bar/BluetoothPanel.qml:103-106。
+const double kDockStatusPanelMargin = 10;
+const double kDockStatusListMargin = 8;
+const double kDockStatusRowSpacing = 2;
+
+/// 列表行高/行圆角/hover 填充 alpha/渐变色时长。
+///
+/// KOS: bar/NetworkPanel.qml:421-428（行 46 r10，hover rgba(1,1,1,.12) 110ms
+/// ColorAnimation）；bar/BluetoothPanel.qml:109-115（行 46 r11 同式）。
+const double kDockStatusRowHeight = 46;
+const double kDockStatusRowRadius = 10;
+const double kDockBluetoothRowRadius = 11;
+const double kDockStatusRowHoverAlpha = 0.12;
+const Duration kDockStatusRowHoverDuration = Duration(milliseconds: 110);
+
+/// 列表行内图标/文字槽位（px）：✓ 19px 左 8；wifi 弧 24×24 左 32；锁 8×11
+/// 紧随弧右 +1；SSID 12px DemiBold，左边距有锁 73 / 无锁 64、右边距 12。
+///
+/// KOS: bar/NetworkPanel.qml:429-510。
+const double kDockWifiRowCheckSize = 19;
+const double kDockWifiRowGlyphLeft = 32;
+const double kDockWifiRowGlyphSize = 24;
+const double kDockWifiRowLockGap = 1;
+const double kDockWifiRowLockWidth = 8;
+const double kDockWifiRowLockHeight = 11;
+const double kDockWifiRowLabelLeftLocked = 73;
+const double kDockWifiRowLabelLeft = 64;
+const double kDockWifiRowLabelRight = 12;
+const double kDockStatusRowFontSize = 12;
+
+/// 蓝牙行内槽位（px）：✓ 18px 左 8、BT glyph 18×18 左 31、名称左 58 右 12。
+///
+/// KOS: bar/BluetoothPanel.qml:116-141。
+const double kDockBluetoothRowCheckSize = 18;
+const double kDockBluetoothRowGlyphLeft = 31;
+const double kDockBluetoothRowGlyphSize = 18;
+const double kDockBluetoothRowLabelLeft = 58;
+
+/// 面板列表卡填充/边线 alpha（KOS `rgba(1,1,1,.08)` 填 + `rgba(0.74,0.95,1,
+/// .28)` 边 → 语义色 textPrimary/hairlineSoft 近似，映射记 deltas）。
+///
+/// KOS: bar/NetworkPanel.qml:393-399。
+const double kDockStatusCardFillAlpha = 0.08;
+
+/// 面板空态字号/透明度（「正在扫描…」/「未发现可用 Wi-Fi」/「蓝牙已关闭」等）。
+///
+/// KOS: bar/NetworkPanel.qml:519-536；bar/BluetoothPanel.qml:151-176
+/// （12px、opacity .5/.52——取 .5 统一，记 deltas）。
+const double kDockStatusEmptyFontSize = 12;
+const double kDockStatusEmptyAlpha = 0.5;
+
+/// 面板底脚高/分隔线 alpha/左边距/字号。
+///
+/// KOS: bar/NetworkPanel.qml:541-564（50px、1px rgba(1,1,1,.16)、left 18、
+/// 14px DemiBold）；bar/BluetoothPanel.qml:179-201 同式。
+const double kDockStatusFooterHeight = 50;
+const double kDockStatusFooterDividerAlpha = 0.16;
+const double kDockStatusFooterLabelLeft = 18;
+const double kDockStatusFooterFontSize = 14;
+
+/// Wi-Fi 面板头行开关球尺寸/圆角（32×32 r16，toggle 中 opacity .55 见
+/// [kDockWifiBusyOpacity]）。
+///
+/// KOS: bar/NetworkPanel.qml:260-294（32×32 radius 16）。
+const double kDockWifiToggleSize = 32;
+
+/// Wi-Fi 面板头行标题字号（KOS 停用头行的「Wi-Fi」16px Bold，本端启用行
+/// 保留同字号）。
+///
+/// KOS: bar/NetworkPanel.qml:236-247。
+const double kDockWifiPanelTitleSize = 16;
+
+/// StatusTooltip 规格（KOS `bar/StatusTooltip.qml`）：黑底 r7、内边距
+/// h9/v6（`implicitWidth = max(minimumWidth, 内容宽+18)` / `+12`）、行距 3、
+/// 12px DemiBold 主行 + 10px Medium 副行、minimumWidth 150。
+///
+/// KOS: bar/StatusTooltip.qml:23-24,41-63；NetworkStatus.qml:105。
+const double kDockStatusTooltipRadius = 7;
+const double kDockStatusTooltipPaddingH = 9;
+const double kDockStatusTooltipPaddingV = 6;
+const double kDockStatusTooltipRowGap = 3;
+const double kDockStatusTooltipPrimarySize = 12;
+const double kDockStatusTooltipSecondarySize = 10;
+const double kDockStatusTooltipMinWidth = 150;
+
+/// Wi-Fi 加入/密码弹层宽/高上限与屏边距（px）：宽 min(420, w−44)、高
+/// min(292, h−40)（v1 只做非 enterprise 分支，292 一档）。
+///
+/// KOS: bar/NetworkPanel.qml:588-594。
+const double kDockWifiDialogWidth = 420;
+const double kDockWifiDialogScreenInset = 44;
+const double kDockWifiDialogHeight = 292;
+const double kDockWifiDialogHeightInset = 40;
+
+/// 密码弹层内部节奏（px）：取消/确认环 30×30 位 margin 13/12；logo 弧 58×48
+/// top 43；标题 18px Bold、说明 14px、框 r14、错误行 12px。
+///
+/// KOS: bar/NetworkPanel.qml:606-625,627-641,653-666,724-804,872-879。
+const double kDockWifiDialogRingSize = 30;
+const double kDockWifiDialogRingMarginH = 13;
+const double kDockWifiDialogRingMarginTop = 12;
+const double kDockWifiDialogGlyphWidth = 58;
+const double kDockWifiDialogGlyphHeight = 48;
+const double kDockWifiDialogGlyphTop = 43;
+const double kDockWifiDialogSidePadding = 22;
+const double kDockWifiDialogTitleSize = 18;
+const double kDockWifiDialogBodySize = 14;
+const double kDockWifiDialogFieldHeight = 42;
+const double kDockWifiDialogFieldRadius = 14;
+const double kDockWifiDialogErrorSize = 12;
+
+/// 密码框聚焦蓝边 alpha（KOS `rgba(0.15,0.52,1,.80)` → accent 同 alpha）。
+///
+/// KOS: bar/NetworkPanel.qml:731-732。
+const double kDockWifiDialogFocusAlpha = 0.80;
+
+/// Wi-Fi 列表行锁形钥匙孔 alpha（KOS `rgba(0,0,0,0.28)` 字面量——不是
+/// shellTheme 角色：它是打在浅色锁体上的镂空点，用黑色低 alpha 而非前景色）。
+///
+/// KOS: bar/NetworkPanel.qml:486-489。
+const double kDockWifiLockKeyholeAlpha = 0.28;
+
+/// Wi-Fi 格图标纵向偏移（px）：KOS `anchors.verticalCenterOffset: 2`。
+///
+/// KOS: bar/NetworkStatus.qml:55-56。
+const double kDockWifiCellIconOffsetY = 2;
+
+// ── TASK-09 控制中心格 + 弹层面板 ──────────────────────────────────────
+
+/// 控制中心格点击面（px）：KOS 24×24（格宽仍走 [kDockTrayItemSize] 26，
+/// 与其它状态格一致）。
+///
+/// KOS: bar/ControlCenterToggle.qml:18-19 — `implicitWidth/Height: 24`。
+const double kDockControlCenterCellSize = 24;
+
+/// 控制中心格图标边长（px）。
+///
+/// KOS: bar/ControlCenterToggle.qml:16,25-26 — `iconSize: 18`。
+const double kDockControlCenterIconSize = 18;
+
+/// 控制中心格透明度：面板开 1.0 / 关 0.88。
+///
+/// KOS: bar/ControlCenterToggle.qml:31-33。
+const double kDockControlCenterCellOpenOpacity = 1.0;
+const double kDockControlCenterCellClosedOpacity = 0.88;
+
+/// 控制中心格 scale：按下 0.90 / hover 1.06 / 常态 1（135ms OutCubic）。
+///
+/// KOS: bar/ControlCenterToggle.qml:34-35 —
+/// `hoverArea.pressed ? 0.90 : containsMouse ? 1.06 : 1`，Behavior
+/// `AppearanceTokens.motion.fastDuration`（135ms）OutCubic。
+const double kDockControlCenterCellPressedScale = 0.90;
+const double kDockControlCenterCellHoverScale = 1.06;
+const Duration kDockControlCenterCellDuration = Duration(milliseconds: 135);
+
+/// 控制中心格 tooltip：「控制中心」、最小宽 92、panelOpen 时不显示。
+///
+/// KOS: bar/ControlCenterToggle.qml:45-51。
+const String kDockControlCenterTooltip = '控制中心';
+const double kDockControlCenterTooltipMinWidth = 92;
+
+/// 控制中心面板宽（px）。
+///
+/// KOS: bar/ControlCenterPanel.qml:139 — `controlCenterWidth: 336`。
+const double kDockControlCenterPanelWidth = 336;
+
+/// KOS 源面板高（px）；v1 无通知历史卡 → 紧凑重排（见
+/// docs/visual-deltas.md TASK-09 节），实际容器高 = 最高子页 + 上下 20。
+///
+/// KOS: bar/ControlCenterPanel.qml:138 — `controlCenterHeight: 597`。
+const double kDockControlCenterHeight = 597;
+
+/// 面板内边距（px）：卡片 `offsetTop/offsetRight` 基准 20。
+///
+/// KOS: bar/ControlCenterPanel.qml:533-534,818-819（offsetTop 20 / offsetRight 20）。
+const double kDockControlCenterMargin = 20;
+
+/// 面板容器高（px）：最高子页（sound 420，KOS :1860）+ 上下 20。
+/// 主页面与子页卡都**底对齐**容器（KOS dockHosted 子页
+/// `offsetTop = height - 20 - cardHeight`，:1838-1840）。
+const double kDockControlCenterBoxHeight = 460;
+
+/// 面板与格间距（px）：任务卡要求同 Wi-Fi 面板 8px（KOS dockHosted
+/// `margins.bottom: 0` 贴边，见 :50）。
+const double kDockControlCenterPanelGap = 8;
+
+/// 面板/卡圆角（px，squircle 退化 circular）。
+///
+/// KOS: bar/ControlCenterPanel.qml:1846（子页卡 glass baseRadius 22）、
+/// :1137,:1206（亮度/音量条 19）、:535,:669（pill 29.5）、:820（媒体卡 25）。
+const double kDockControlCenterRadius = 22;
+const double kDockControlCenterBarRadius = 19;
+const double kDockControlCenterPillRadius = 29.5;
+const double kDockControlCenterMediaRadius = 25;
+
+/// pill（Wi-Fi/蓝牙）几何（px）：137×59，左列 20，wifi top 20 / bt top 87。
+///
+/// KOS: bar/ControlCenterPanel.qml:533-537（wifiCard）、:667-671（bluetoothCard）；
+/// 本端相对 top-left：`left = 336 - 179 - 137 = 20`。
+const double kDockControlCenterPillWidth = 137;
+const double kDockControlCenterPillHeight = 59;
+const double kDockControlCenterColumnLeft = 20;
+const double kDockControlCenterWifiTop = 20;
+const double kDockControlCenterBluetoothTop = 87;
+
+/// 媒体卡几何（px）：151×127，top 20、left `336-20-151 = 165`。
+///
+/// KOS: bar/ControlCenterPanel.qml:818-822。
+const double kDockControlCenterMediaWidth = 151;
+const double kDockControlCenterMediaHeight = 127;
+const double kDockControlCenterMediaLeft = 165;
+const double kDockControlCenterMediaTop = 20;
+
+/// 亮度/音量条几何（px）：296×57。
+///
+/// KOS: bar/ControlCenterPanel.qml:1138-1139（亮度）、:1207-1208（音量）。
+const double kDockControlCenterBarWidth = 296;
+const double kDockControlCenterBarHeight = 57;
+
+/// 亮度/音量条纵向坐标（px）：**紧凑重排**——KOS 为 217/282（:1135,:1204），
+/// 中间 52px 胶囊卡与通知历史卡 v1 砍掉后上移补空（记 deltas）。
+const double kDockControlCenterBrightnessTop = 155;
+const double kDockControlCenterVolumeTop = 220;
+
+/// 主页面紧凑内容高（px）：`220 + 57 + 20`。
+const double kDockControlCenterMainHeight = 297;
+
+/// pill 内部几何（px）：圆开关盘 39、左 10 居中；文字列 left 58 right 18；
+/// 「›」right 8；整卡点击区（圆盘外）left 49 起。
+///
+/// KOS: bar/ControlCenterPanel.qml:544-545,620,638-642,651。
+const double kDockControlCenterPillDiscSize = 39;
+const double kDockControlCenterPillDiscLeft = 10;
+const double kDockControlCenterPillTextLeft = 58;
+const double kDockControlCenterPillTextRight = 18;
+const double kDockControlCenterPillChevronRight = 8;
+const double kDockControlCenterPillTapLeft = 49;
+
+/// pill 字号/图标（px）：标题 12 Bold、副标题 10、「›」14 Bold、盘内图标 20。
+///
+/// KOS: bar/ControlCenterPanel.qml:626,634,642,557。
+const double kDockControlCenterPillTitleSize = 12;
+const double kDockControlCenterPillSubtitleSize = 10;
+const double kDockControlCenterPillChevronSize = 14;
+const double kDockControlCenterPillGlyphSize = 20;
+
+/// pill 交互态：盘 toggle 中 opacity .55、卡不可用 alpha .48；卡 scale
+/// 1.015/0.97、盘 scale 1.04/0.92。
+///
+/// KOS: bar/ControlCenterPanel.qml:531-532,549,551-554,665-666,673。
+const double kDockControlCenterPillBusyOpacity = 0.55;
+const double kDockControlCenterPillUnavailableAlpha = 0.48;
+const double kDockControlCenterPillCardHoverScale = 1.015;
+const double kDockControlCenterPillCardPressedScale = 0.97;
+const double kDockControlCenterPillDiscHoverScale = 1.04;
+const double kDockControlCenterPillDiscPressedScale = 0.92;
+
+/// 媒体卡内部几何（px）：专辑图 43 r13 @(13,13)；文字列 art.right+8 / right 10；
+/// 底部控制行 bottomMargin 15、间距 12；prev/next 32、play 40。
+///
+/// KOS: bar/ControlCenterPanel.qml:828-829,860-861,879-881,147-151。
+const double kDockControlCenterMediaArtSize = 43;
+const double kDockControlCenterMediaArtRadius = 13;
+const double kDockControlCenterMediaArtLeft = 13;
+const double kDockControlCenterMediaArtTop = 13;
+const double kDockControlCenterMediaTextLeft = 8;
+const double kDockControlCenterMediaTextRight = 10;
+const double kDockControlCenterMediaControlsBottom = 15;
+const double kDockControlCenterMediaControlsSpacing = 12;
+const double kDockControlCenterMediaNavSize = 32;
+const double kDockControlCenterMediaPlaySize = 40;
+
+/// 媒体卡字号/占位（px）：标题 12 Bold、艺术家 10 @0.70、占位「♫」21 @0.86。
+///
+/// KOS: bar/ControlCenterPanel.qml:833-836,867,875。
+const double kDockControlCenterMediaTitleSize = 12;
+const double kDockControlCenterMediaArtistSize = 10;
+const double kDockControlCenterMediaArtistAlpha = 0.70;
+const double kDockControlCenterMediaPlaceholderSize = 21;
+const double kDockControlCenterMediaPlaceholderAlpha = 0.86;
+
+/// 亮度/音量条内部几何（px）：标题 left 14 / top 8；亮度右上「%/无亮度设备」
+/// right 30（9px @0.50）、音量右上「%」right 14（10px @0.72）；
+/// 「›」right 13 / top 5（15px）；顶部热区亮度 27 / 音量 26；
+/// 滑条 left 31（亮度）/ 34（音量）right 31/17、bottom 8；
+/// 「☀」/喇叭 glyph left 12 bottom 12（13/15px）。
+///
+/// KOS: bar/ControlCenterPanel.qml:1145-1175,1192-1196,1214-1272。
+const double kDockControlCenterBarLabelLeft = 14;
+const double kDockControlCenterBarLabelTop = 8;
+const double kDockControlCenterBarLabelSize = 11;
+const double kDockControlCenterBarValueSize = 9;
+const double kDockControlCenterBarValueAlpha = 0.50;
+const double kDockControlCenterBarValueRight = 30;
+const double kDockControlCenterBarChevronSize = 15;
+const double kDockControlCenterBarChevronRight = 13;
+const double kDockControlCenterBarChevronTop = 5;
+const double kDockControlCenterBrightnessHotZone = 27;
+const double kDockControlCenterSoundHotZone = 26;
+const double kDockControlCenterSoundValueSize = 10;
+const double kDockControlCenterSoundValueAlpha = 0.72;
+const double kDockControlCenterSoundValueRight = 14;
+const double kDockControlCenterBrightnessSliderLeft = 31;
+const double kDockControlCenterBrightnessSliderRight = 31;
+const double kDockControlCenterVolumeSliderLeft = 34;
+const double kDockControlCenterVolumeSliderRight = 17;
+const double kDockControlCenterSliderBottom = 8;
+const double kDockControlCenterBarGlyphLeft = 12;
+const double kDockControlCenterBarGlyphBottom = 12;
+const double kDockControlCenterBarGlyphAlpha = 0.65;
+const double kDockControlCenterSunGlyphSize = 13;
+const double kDockControlCenterVolumeGlyphSize = 15;
+
+/// `DockControlCenterSlider` 规格（KOS `bar/ControlCenterSlider.qml` →
+/// `shared/qml/controls/LiquidSlider.qml`）：高 30、track 4、thumb 白
+/// 36×18 r9；glass 轨 `rgba(1,1,1,0.17)`/accent `rgba(1,1,1,0.42)`，
+/// material 轨 surfaceVariant/accent primary。
+///
+/// KOS: bar/ControlCenterSlider.qml:12-23。
+const double kDockControlCenterSliderHeight = 30;
+const double kDockControlCenterTrackHeight = 4;
+const double kDockControlCenterThumbWidth = 36;
+const double kDockControlCenterThumbHeight = 18;
+const double kDockControlCenterThumbRadius = 9;
+
+/// glass 轨/进度 alpha（KOS `Qt.rgba(1,1,1,0.17)`/`0.42` → textPrimary 同
+/// alpha 语义映射）。
+///
+/// KOS: bar/ControlCenterSlider.qml:18-21。
+const double kDockControlCenterTrackAlpha = 0.17;
+const double kDockControlCenterTrackAccentAlpha = 0.42;
+
+/// 子页卡几何（px）：宽 296；高 wifi 360 / bt 340 / brightness 280 /
+/// sound 420。
+///
+/// KOS: bar/ControlCenterPanel.qml:1853,1857-1860。
+const double kDockControlCenterSubmenuWidth = 296;
+const double kDockControlCenterWifiPageHeight = 360;
+const double kDockControlCenterBluetoothPageHeight = 340;
+const double kDockControlCenterBrightnessPageHeight = 280;
+const double kDockControlCenterSoundPageHeight = 420;
+
+/// 子页共用 header（px）：top 12、左右 12、高 28；返回钮 26×26 r13
+/// （「‹」18 Bold）；标题 left 8、13 Bold；分隔线 top `header.bottom + 9`、
+/// 左右 12。
+///
+/// KOS: bar/ControlCenterPanel.qml:1898-1930,1946,1954,2005-2013。
+const double kDockControlCenterHeaderTop = 12;
+const double kDockControlCenterHeaderSideMargin = 12;
+const double kDockControlCenterHeaderHeight = 28;
+const double kDockControlCenterBackSize = 26;
+const double kDockControlCenterBackRadius = 13;
+const double kDockControlCenterBackGlyphSize = 18;
+const double kDockControlCenterTitleSize = 13;
+const double kDockControlCenterTitleLeft = 8;
+const double kDockControlCenterDividerTop = 9;
+
+/// wifi/bt 子页右侧开关球（px）：38×22 r11、thumb 18 r9、内缩 2；
+/// x 动画 160ms OutCubic、toggle 中 opacity .6。
+///
+/// KOS: bar/ControlCenterPanel.qml:1958-1998。
+const double kDockControlCenterSwitchWidth = 38;
+const double kDockControlCenterSwitchHeight = 22;
+const double kDockControlCenterSwitchRadius = 11;
+const double kDockControlCenterSwitchThumbSize = 18;
+const double kDockControlCenterSwitchThumbInset = 2;
+const double kDockControlCenterSwitchBusyOpacity = 0.6;
+const Duration kDockControlCenterSwitchDuration = Duration(milliseconds: 160);
+
+/// 子页列表/底脚几何（px）：行 42、底脚 38（11 DemiBold + 「›」）、
+/// 列表左右 14。
+///
+/// KOS: bar/ControlCenterPanel.qml:2065-2066,2109,2375,2600-2616,2991-3011。
+const double kDockControlCenterPageRowHeight = 42;
+const double kDockControlCenterPageFooterHeight = 38;
+const double kDockControlCenterPageFooterFontSize = 11;
+const double kDockControlCenterPageListMargin = 14;
+
+/// 亮度子页行高（px）：label 11 DemiBold + 「%」10 + 副行 9 + 滑条 bottom 3。
+///
+/// KOS: bar/ControlCenterPanel.qml:2549-2586。
+const double kDockControlCenterBrightnessRowHeight = 82;
+
+/// 声音子页几何（px）：主音量区 62（「主音量」11 + %10 + 19×16 喇叭 glyph、
+/// 滑条高 28 left 26 right 2 bottom 4）；「输出设备」区 52（标题 10 @0.60 +
+/// r10 设备框）；「应用音量」行 58（间距 3）r8、滑条高 27。
+///
+/// KOS: bar/ControlCenterPanel.qml:2648-2775,2788-2835,2870-2980。
+const double kDockControlCenterVolumeSectionHeight = 62;
+const double kDockControlCenterOutputSectionHeight = 52;
+const double kDockControlCenterOutputRowRadius = 10;
+const double kDockControlCenterAppRowHeight = 58;
+const double kDockControlCenterAppRowGap = 3;
+const double kDockControlCenterAppRowRadius = 8;
+const double kDockControlCenterSectionTitleSize = 10;
+const double kDockControlCenterSectionTitleAlpha = 0.60;
+const double kDockControlCenterSubmenuVolumeSliderHeight = 28;
+const double kDockControlCenterAppSliderHeight = 27;
+const double kDockControlCenterSubmenuVolumeSliderLeft = 26;
+const double kDockControlCenterSubmenuVolumeSliderRight = 2;
+const double kDockControlCenterSubmenuVolumeSliderBottom = 4;
+const double kDockControlCenterSubmenuGlyphWidth = 19;
+const double kDockControlCenterSubmenuGlyphHeight = 16;
+
+/// 应用音量行最多展示条数（KOS `audioApplications.slice(0, 3)`）。
+///
+/// KOS: bar/ControlCenterPanel.qml:2880。
+const int kDockControlCenterAppRowCount = 3;
+
+/// 子页导航 crossfade（KOS `common/PageMotion.qml` → enter =
+/// `normalDuration` 200ms OutCubic、exit = `fastDuration`）：入场卡
+/// scale 0.96→1、出场 1→0.96，入场内容位移 8px。
+///
+/// KOS: bar/ControlCenterPanel.qml:347-353,357-371；common/PageMotion.qml:4-5。
+const Duration kDockControlCenterPageDuration = Duration(milliseconds: 200);
+const double kDockControlCenterPageStartScale = 0.96;
+const double kDockControlCenterPageOffset = 8;
+
+/// 控制中心格 glyph 自绘几何（px，24×24 点击面内）：两条水平滑杆 + 两枚
+/// 圆钮（KOS 是 BundledIcon `control-center` 工程图形，本端近似自绘，记
+/// docs/visual-deltas.md）。
+const double kDockControlCenterGlyphTrackTop = 8;
+const double kDockControlCenterGlyphTrackBottom = 16;
+const double kDockControlCenterGlyphTrackLeft = 3;
+const double kDockControlCenterGlyphTrackRight = 15;
+const double kDockControlCenterGlyphKnobRadius = 2.6;
+const double kDockControlCenterGlyphStroke = 1.8;
+
+/// pill busy 档（Wi-Fi/蓝牙）旋转弧（px/s）：21×21 画布、`r = w/2 − 1.5`、
+/// lineWidth 2、扫 1.5π、900ms/圈；glyph/spinner 交叉淡入 140ms。
+///
+/// KOS: bar/ControlCenterPanel.qml:549-617（`wifiBusySpinner` / `wifiBusyArc`
+/// / `RotationAnimation` 900ms）。
+const double kDockControlCenterPillSpinnerSize = 21;
+const double kDockControlCenterPillSpinnerInset = 1.5;
+const double kDockControlCenterPillSpinnerStroke = 2;
+const Duration kDockControlCenterBusySpinDuration = Duration(milliseconds: 900);
+const Duration kDockControlCenterBusyFadeDuration = Duration(milliseconds: 140);
+
+/// 应用音量行 hover 底 alpha（KOS 深色档 `rgba(1,1,1,.10)`，浅色档
+/// `rgba(0,0,0,.055)` → 同式前景低 alpha 近似）。
+///
+/// KOS: bar/ControlCenterPanel.qml:2898-2903。
+const double kDockControlCenterAppRowHoverAlpha = 0.10;
+
+/// 面板打开期间的周期刷新（KOS `ControlCenterService`）：
+/// `audioApplicationsTimer` 1.8s（:437-440）、`refreshTimer` 面板开 3s /
+/// 关 120s（:428-433；本端面板只在开着时挂载 → 恒取 3s 档）。
+const Duration kDockControlCenterAppRefreshInterval = Duration(
+  milliseconds: 1800,
+);
+const Duration kDockControlCenterRefreshInterval = Duration(seconds: 3);

@@ -20,8 +20,11 @@ import 'dart:typed_data';
 import 'package:denial_flutter_sdk/effects.dart' show ShellBackdropBlur;
 import 'package:denial_flutter_sdk/glass_configuration.dart'
     show ShellTransparencyMode;
+import 'package:denial_flutter_sdk/service_backends.dart';
 import 'package:denial_flutter_sdk/services.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
+import 'package:denial_flutter_sdk/system_services.dart'
+    show bluetoothServiceProvider, networkServiceProvider;
 import 'package:denial_sdk/system.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -128,6 +131,73 @@ class _FakeWeatherProvider implements DockWeatherProvider {
 
   @override
   void dispose() {}
+}
+
+/// TASK-08：`trayAccessory` 非空时 `KosDockShell` 会 watch
+/// `networkConnectivityProvider`/`bluetoothProvider`（估算托盘宽度要计入
+/// wifi/bt 格）→ 必须注入假后端，否则默认 service provider 起真实 dbus 探测
+/// （4s pending Timer → `A Timer is still pending`）。
+class _StubNetworkBackend implements NetworkBackend {
+  @override
+  Stream<NetworkSnapshot> get snapshots => const Stream.empty();
+  @override
+  NetworkSnapshot get currentSnapshot => const NetworkSnapshot.unavailable();
+  @override
+  Future<void> start() async {}
+  @override
+  Future<void> refresh() async {}
+  @override
+  Future<void> setWirelessEnabled(bool enabled) async {}
+  @override
+  Future<void> requestScan() async {}
+  @override
+  Future<void> connect(WifiNetwork network, {String? password}) async {}
+  @override
+  Future<void> disconnect() async {}
+  @override
+  Future<void> forget(WifiNetwork network) async {}
+  @override
+  Future<void> dispose() async {}
+}
+
+class _StubBluetoothBackend implements BluetoothBackend {
+  @override
+  Stream<BluetoothSnapshot> get snapshots => const Stream.empty();
+  @override
+  Stream<BluetoothPairingRequest?> get pairingRequests => const Stream.empty();
+  @override
+  BluetoothSnapshot get currentSnapshot =>
+      const BluetoothSnapshot.unavailable();
+  @override
+  BluetoothPairingRequest? get currentPairingRequest => null;
+  @override
+  Future<void> start() async {}
+  @override
+  Future<void> refresh() async {}
+  @override
+  Future<void> setPowered(bool powered) async {}
+  @override
+  Future<void> startDiscovery() async {}
+  @override
+  Future<void> stopDiscovery() async {}
+  @override
+  Future<void> pair(BluetoothDeviceInfo device) async {}
+  @override
+  Future<void> setTrusted(BluetoothDeviceInfo device, bool trusted) async {}
+  @override
+  Future<void> connect(BluetoothDeviceInfo device) async {}
+  @override
+  Future<void> disconnect(BluetoothDeviceInfo device) async {}
+  @override
+  Future<void> remove(BluetoothDeviceInfo device) async {}
+  @override
+  void respondToPairing(
+    int requestId, {
+    required bool accepted,
+    String? response,
+  }) {}
+  @override
+  Future<void> dispose() async {}
 }
 
 class _FakeMediaCommands implements MediaCommands {
@@ -286,8 +356,10 @@ class _FakeShellServices implements ShellServices {
   ProviderListenable<bool> get trayVisible => Provider((_) => false);
 
   @override
+  // 恒非空：shell 的 hasTray = trayEstimateWidth>0（托盘项数或 battery 格），
+  // 占位槽用例需要 tray 槽在场才有 divider3；给一个常驻托盘项。
   ProviderListenable<List<String>> get trayItemIds =>
-      Provider((_) => const <String>[]);
+      Provider((_) => const <String>['stub']);
 
   @override
   Widget buildSystemTray(
@@ -384,6 +456,10 @@ Widget _wrap(
     // `dockWeatherSnapshotProvider` → 必须注入假 provider，否则默认实现会
     // `start()` 真实 HttpClient/状态文件/周期 Timer（CONSTRAINTS §10）。
     dockWeatherProviderProvider.overrideWithValue(_FakeWeatherProvider()),
+    // TASK-08：`trayAccessory` 非空 → shell watch 网络/蓝牙 provider，注入假
+    // 后端防止真实 dbus 探测留下 pending Timer。
+    networkServiceProvider.overrideWithValue(_StubNetworkBackend()),
+    bluetoothServiceProvider.overrideWithValue(_StubBluetoothBackend()),
   ],
   child: MaterialApp(
     home: ShellTheme(
@@ -400,7 +476,8 @@ Widget _wrap(
             services: services,
             monitorId: 0,
             infoCard: infoCard == null ? null : (_) => infoCard,
-            trayAccessory: trayAccessory,
+            trayAccessory:
+                trayAccessory == null ? null : (_) => trayAccessory,
           ),
         ),
       ),

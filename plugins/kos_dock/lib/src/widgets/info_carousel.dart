@@ -51,6 +51,7 @@ import 'cards/music_card.dart';
 import 'cards/weather_card.dart';
 import 'dock_info_popup.dart';
 import 'dock_preview_popup.dart';
+import 'media_art.dart';
 
 /// KOS `DockInfoCarousel`：4 卡共享槽 + 30s 自动轮换 + DockInfoPopup。
 /// popup 协调器经构造参数下发（`dock_shell.dart` 的全 pill 唯一
@@ -729,8 +730,9 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     final monitorBounds = ref.watch(
       widget.services.monitorBounds(widget.monitorId),
     );
-    // 封面：artUrl 本地路径经 imageBytes；http(s)/空 → null（记 deltas）。
-    final artPath = _localArtPath(media.artUrl);
+    // 封面：artUrl → 本地路径（`file:` 剥前缀；http(s)/空/其它 scheme →
+    // null，本端不抓网络图，记 deltas）经 `imageBytes`。
+    final artPath = dockLocalArtPath(media.artUrl);
     final artwork = artPath == null
         ? null
         : ref.watch(widget.services.imageBytes(artPath)).value;
@@ -862,17 +864,6 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
         ),
       ),
     );
-  }
-
-  /// `artUrl` → 本地路径（`file://` 前缀剥离）；http(s)/空/非 file scheme
-  /// → null（KOS Image 直抓 http，本端不抓，记 deltas）。
-  static String? _localArtPath(String artUrl) {
-    if (artUrl.isEmpty) return null;
-    if (artUrl.startsWith('file://')) {
-      return Uri.decodeComponent(artUrl.substring(7));
-    }
-    if (artUrl.startsWith('/')) return artUrl;
-    return null; // http(s)/其它 scheme 不抓
   }
 
   /// `onHasMusicChanged/onHasWeatherChanged/onCardOrderChanged` 的
