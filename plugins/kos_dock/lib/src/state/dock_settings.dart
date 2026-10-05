@@ -45,8 +45,17 @@ final trashStateProvider = StreamProvider<TrashState>(
 /// keepAlive（非 autoDispose）：info 卡槽是 `hasInfo` 门控的按需子树，
 /// autoDispose 会在槽短暂卸载时重启刷新节奏/丢 ready 快照（记
 /// docs/visual-deltas.md）。
+///
+/// 城市来源 = **deskcenter 的 `weather.json`**（KOS weather 是 shell 全局
+/// `WeatherService`，城市由 deskcenter 设置页写共享状态文件——
+/// kos_deskcenter `weather_provider.dart:294-307`）；本端经
+/// `FileDockDeskCenterLocationSource` 只读复用该设置，缺文件/无效回退
+/// dock 自己的快照缓存，再回退 `kDockWeatherDefaultLocation`（记
+/// docs/visual-deltas.md）。
 final dockWeatherProviderProvider = Provider<DockWeatherProvider>((ref) {
-  final provider = OpenMeteoDockWeatherProvider();
+  final provider = OpenMeteoDockWeatherProvider(
+    deskCenterLocationSource: FileDockDeskCenterLocationSource(),
+  );
   ref.onDispose(provider.dispose);
   return provider;
 });

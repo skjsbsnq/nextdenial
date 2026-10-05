@@ -13,7 +13,11 @@
 ///   hairlineSoft 边；
 /// - popup 开/关动画沿用 ACCEPTANCE 菜单条款（150ms OutCubic / 140ms
 ///   InCubic + scale 0.96→1 + 20px 位移，`DockMenuOverlay` 同式）；
-/// - `AnimatedPopupWindow` 独立 surface → `OverlayPortal`（同 preview 范式）。
+/// - `AnimatedPopupWindow` 独立 surface → `OverlayPortal`（同 preview 范式）；
+/// - 详情是 hover tooltip 非 modal 菜单：`DockInfoOverlay` 无 fullScene
+///   输入区/点外即关/Esc/Focus 捕获（KOS `DockInfoPopup` 无 dismissal 通道，
+///   收场全靠 `pointerInside` + `infoPopupCloseDelay`，
+///   DockInfoPopup.qml:219-221 + DockInfoCarousel.qml:304-312）。
 library;
 
 import 'dart:math' as math;
@@ -22,7 +26,6 @@ import 'package:denial_flutter_sdk/effects.dart' show ShellBackdropBlur;
 import 'package:denial_flutter_sdk/input.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 
 import '../theme/dock_tokens.dart';
 
@@ -172,20 +175,29 @@ class DockInfoPanel extends StatelessWidget {
   }
 }
 
-/// 详情浮层骨架：`OverlayPortal.overlayChild` 内容（`DockMenuOverlay`
-/// 同构，dock_menu.dart:91-194）：fullScene 输入区 + 点外即关 + Esc +
-/// 面板底边贴 anchor 顶 −`kDockInfoPopupGap`(12px，KOS
-/// DockInfoPopup.qml:34-39 `anchor.margins.top: -12`)
-/// + 屏内 clamp + 150/140ms + scale 0.96→1 + 20px 位移（ACCEPTANCE
-/// popup 条款，调用方驱动 progress）。
+/// 详情浮层：`OverlayPortal.overlayChild` 内容，对齐 preview 的 **hover
+/// popup 范式**（`dock_preview_popup.dart` `_buildPreview` :601-669）——
+/// 详情是 tooltip 不是 modal 菜单：
+/// - `ShellInputRegion` 默认 `childBounds`（包在 popup 的 `Positioned`
+///   内，输入区 = 面板+桥带矩形）；**不**用 fullScene/`ShellKeyboardPolicy.
+///   capture`/`Focus(autofocus)`；
+/// - 无点外即关层、无 Esc（KOS `DockInfoPopup` 也没有 dismissal 通道：全件
+///   只靠 `pointerInside` HoverHandler 与 `infoPopupCloseDelay` 收场，
+///   DockInfoPopup.qml:22,219-221 + DockInfoCarousel.qml:304-312）；
+/// - 容器高度含 `kDockInfoPopupGap`(12px) 桥带：`Positioned` `top =
+///   anchor.top - gap - panelHeight`、`height = panelHeight + gap`，
+///   `MouseRegion` 整覆含底部桥带的整个 Positioned（桥接卡槽→popup 的
+///   12px 真空，等价 KOS `pointerInside` 跨 surface 桥接），面板
+///   `Align(topCenter)`；
+/// - 面板底边贴 anchor 顶 −12px（`anchor.margins.top: -12`，
+///   DockInfoPopup.qml:34-39）+ 屏内 clamp + 150/140ms + scale 0.96→1 +
+///   20px 位移（ACCEPTANCE popup 条款，调用方驱动 progress）。
 class DockInfoOverlay extends StatelessWidget {
   const DockInfoOverlay({
     required this.anchor,
     required this.output,
-    required this.overlaySize,
     required this.progress,
     required this.content,
-    required this.onDismiss,
     this.onPointerInsideChanged,
     this.debugLabel = 'Dock info popup',
     super.key,
@@ -197,19 +209,13 @@ class DockInfoOverlay extends StatelessWidget {
   /// 屏内矩形（clamp 边界，overlay 坐标系）。
   final Rect output;
 
-  /// overlay 尺寸（bottom 定位用）。
-  final Size overlaySize;
-
   /// 0..1 显隐进度（调用方 AnimationController）。
   final Animation<double> progress;
 
   final DockInfoContent content;
 
-  /// 点外/Esc 关闭回调（KOS `requestClose`）。
-  final VoidCallback onDismiss;
-
-  /// KOS `pointerInside`（DockInfoPopup.qml:22,219-221）：popup 内 hover
-  /// 状态回传，供 carousel 的 closeDelay 桥接。
+  /// KOS `pointerInside`（DockInfoPopup.qml:22,219-221）：popup（含桥带）
+  /// 内 hover 状态回传，供 carousel 的 closeDelay 桥接。
   final ValueChanged<bool>? onPointerInsideChanged;
 
   final String debugLabel;
@@ -222,6 +228,12 @@ class DockInfoOverlay extends StatelessWidget {
     );
     if (maxHeight <= 0) return const SizedBox.shrink();
     const width = kDockInfoPopupWidth;
+    const gap = kDockInfoPopupGap;
+    // 面板内容高（rowCount*26+62，DockInfoPopup.qml:28）经 maxHeight clamp。
+    final panelHeight = math.min(
+      DockInfoContent.heightFor(content.rows.length),
+      maxHeight,
+    );
     final left = (anchor.center.dx - width / 2).clamp(
       output.left + kDockPopupEdgeMargin,
       math.max(
@@ -229,65 +241,54 @@ class DockInfoOverlay extends StatelessWidget {
         output.right - kDockPopupEdgeMargin - width,
       ),
     );
-    return ShellInputRegion(
-      debugLabel: debugLabel,
-      pointerPolicy: ShellPointerPolicy.fullScene,
-      keyboardPolicy: ShellKeyboardPolicy.capture,
-      child: CallbackShortcuts(
-        bindings: {
-          const SingleActivator(LogicalKeyboardKey.escape): onDismiss,
-        },
-        child: Focus(
-          autofocus: true,
-          child: Stack(
-            children: [
-              // 点外即关（dock_menu.dart:150-155 同式）。
-              Positioned.fill(
-                child: Listener(
-                  behavior: HitTestBehavior.opaque,
-                  onPointerDown: (_) => onDismiss(),
-                  child: const ColoredBox(color: Colors.transparent),
-                ),
-              ),
-              Positioned(
-                left: left.toDouble(),
-                // KOS: popup.bottom = anchor.top − 12
-                // （DockInfoPopup.qml:34-39 `anchor.margins.top: -12`；
-                // DockMenuOverlay bottom 定位同式）。
-                bottom: overlaySize.height - anchor.top + kDockInfoPopupGap,
-                width: width,
-                child: MouseRegion(
-                  onEnter: (_) => onPointerInsideChanged?.call(true),
-                  onExit: (_) => onPointerInsideChanged?.call(false),
-                  child: AnimatedBuilder(
-                    animation: progress,
-                    builder: (context, child) {
-                      final v = progress.value;
-                      // ACCEPTANCE popup 条款：scale 0.96→1 + ~20px
-                      // 位移（底锚向上长，KOS motionOrigin: Item.Bottom
-                      // DockInfoPopup.qml:24）。
-                      return Transform.translate(
-                        offset: Offset(0, (1 - v) * kDockMenuEnterOffset),
-                        child: Transform.scale(
-                          scale:
-                              kDockMenuEnterScale +
-                              (1 - kDockMenuEnterScale) * v,
-                          alignment: Alignment.bottomCenter,
-                          child: Opacity(opacity: v, child: child),
-                        ),
-                      );
-                    },
-                    child: ConstrainedBox(
-                      constraints: BoxConstraints(maxHeight: maxHeight),
-                      child: DockInfoPanel(content: content),
-                    ),
+    return Stack(
+      children: [
+        Positioned(
+          left: left.toDouble(),
+          // KOS: popup.bottom = anchor.top − 12（`anchor.margins.top: -12`，
+          // DockInfoPopup.qml:34-39）；容器高 = 面板 + gap 桥带，底部桥带
+          // 贴卡槽顶边（preview `_buildPreview` :598-607 同式）。
+          top: anchor.top - gap - panelHeight,
+          width: width,
+          height: panelHeight + gap,
+          child: ShellInputRegion(
+            debugLabel: debugLabel,
+            // 默认 childBounds + keyboardPolicy none（preview 同式）。
+            child: MouseRegion(
+              // KOS `pointerInside`：整个 Positioned（含底部 12px 桥带）
+              // 都算 popup 内。
+              onEnter: (_) => onPointerInsideChanged?.call(true),
+              onExit: (_) => onPointerInsideChanged?.call(false),
+              child: Align(
+                alignment: Alignment.topCenter,
+                child: AnimatedBuilder(
+                  animation: progress,
+                  builder: (context, child) {
+                    final v = progress.value;
+                    // ACCEPTANCE popup 条款：scale 0.96→1 + ~20px 位移
+                    // （底锚向上长，KOS motionOrigin: Item.Bottom
+                    // DockInfoPopup.qml:24）。
+                    return Transform.translate(
+                      offset: Offset(0, (1 - v) * kDockMenuEnterOffset),
+                      child: Transform.scale(
+                        scale:
+                            kDockMenuEnterScale +
+                            (1 - kDockMenuEnterScale) * v,
+                        alignment: Alignment.bottomCenter,
+                        child: Opacity(opacity: v, child: child),
+                      ),
+                    );
+                  },
+                  child: ConstrainedBox(
+                    constraints: BoxConstraints(maxHeight: maxHeight),
+                    child: DockInfoPanel(content: content),
                   ),
                 ),
               ),
-            ],
+            ),
           ),
         ),
-      ),
+      ],
     );
   }
 }

@@ -269,6 +269,19 @@ abstract interface class DockWeatherStateStore {
   Future<void> write(Map<String, Object?> payload);
 }
 
+/// deskcenter `weather.json` 的 location 读取注入点（CONSTRAINTS §10 接口/
+/// IO 分离）：返回 deskcenter 状态文件解码后的 JSON 对象；文件缺失/损坏/
+/// 不可读返回 null。
+///
+/// KOS 侧 weather 是 shell 全局 `WeatherService`（DockContainer.qml:48-49），
+/// 位置由 deskcenter 设置页写入共享状态文件；本端经文件复用该设置（记
+/// docs/visual-deltas.md），生产实现 `FileDockDeskCenterLocationSource`
+/// （`dock_weather_io.dart`），测试注入 fake。
+abstract interface class DockDeskCenterLocationSource {
+  /// 读取 deskcenter `weather.json` 的解码负载；缺失/损坏 → null。
+  Future<Map<String, Object?>?> read();
+}
+
 /// GET JSON 的注入点：返回解码后的 JSON 对象；HTTP/网络错误自行抛出。
 ///
 /// 拷自 kos_deskcenter `weather_provider.dart:82` `WeatherHttpGet`。

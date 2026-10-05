@@ -154,6 +154,10 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
                 _portalController.hide();
                 widget.coordinator?.release(this);
               }
+              // popup 完全收起 → 恢复 30s 轮换（popup 开着时
+              // [_syncCarouselTimer] 不建表，记 deltas）。dispose 中
+              // status 变回 dismissed 时不做 ref.read。
+              if (mounted) _syncCarouselTimer();
             }
           });
     // KOS `Component.onCompleted: ensureValidPage(showClock)`（:195）——
@@ -167,9 +171,10 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     });
     _syncCarouselTimer();
     _clockTicker = Timer.periodic(const Duration(seconds: 1), (_) {
-      // `services.clock` 流不 tick（fake 恒值）时保证时钟卡仍每秒刷新
-      // （记 deltas）。有真 tick 时 clock watch 已覆盖，此 setState 是
-      // 1Hz 幂等重绘，可接受。
+      // KOS `SystemClock precision: Seconds`（DockInfoPopup.qml:41-44 /
+      // DockClockWidget.qml:27-30）的等价物：时钟卡 `now` 恒取秒级
+      // `_clockNow`；`services.clock` 是分钟级流、对秒字段无价值故不取
+      // （记 deltas）。1Hz setState 重绘保留。
       if (mounted) setState(() => _clockNow = DateTime.now());
     });
   }
@@ -300,9 +305,10 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
       _previousPage = _page;
       _transitionDirection = dir;
       _page = pages[(currentIndex + dir + pages.length) % pages.length];
-      // C5：详情 popup 已开时内容跟随切页（KOS `infoPopup.page =
-      // carousel.hoveredPage` 实时跟随，:253-277/:317）——只换 `_popupPage`，
-      // 不重播 150/140ms 显隐动画。
+      // popup 开着期间 `_followPopupPage` 冻结 `_popupPage`（详情不随
+      // 轮播跳走；KOS `infoPopup.page: carousel.hoveredPage` :317 的实时
+      // 跟随是本端有意偏差，记 deltas）。popup 开着时 [_syncCarouselTimer]
+      // 不建表，此路径只剩滚轮切页可达。
       _followPopupPage();
     });
     // KOS `switchPage(resetTimer=true)` → carouselTimer.restart()（:143）。
@@ -335,6 +341,10 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     _timerPages = pages;
     _timerAutoRotate = prefs.infoCardAutoRotate;
     _timerHovered = _hovered;
+    // popup 开着时不建轮换表——轮播切页会带着 popup 内容跳走（popup 开时
+    // `_followPopupPage` 已冻结 `_popupPage`，这里连轮换本身也停掉，记
+    // deltas：KOS `carouselTimer.running` 无此项）。
+    if (_portalController.isShowing) return;
     if (!prefs.infoCardAutoRotate || _hovered) return;
     if (pages.length < 2) return;
     _carouselTimer = Timer.periodic(kDockInfoCarouselInterval, (_) {
@@ -364,11 +374,16 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     });
   }
 
-  /// `_page` 变更后（切页 / 收敛）让已开的详情 popup 内容跟随新页
-  /// （C5，KOS `infoPopup.page: carousel.hoveredPage` :317 的等价）。
+  /// `_page` 变更后（切页 / 收敛）的历史上曾让已开的详情 popup 跟随新页
+  /// （KOS `infoPopup.page: carousel.hoveredPage` :317）。**popup 开着时不再
+  /// 跟随**（记 deltas：KOS 的 hoveredPage≈本端 `_page`，轮播把 `_page`
+  /// 切走会带着详情内容跳走；本端改为 popup 开着期间 `_popupPage` 冻结，
+  /// 指针移到别的卡上由 hover 重触发 `_openPopup` 换内容）。
   /// 只换 `_popupPage`——`_popupProgress` 不动，150/140ms 显隐动画不重播。
   void _followPopupPage() {
-    if (_portalController.isShowing) _popupPage = _page;
+    // `_portalController.isShowing`（popup 开着）→ 不跟随页变化。
+    if (_portalController.isShowing) return;
+    _popupPage = _page;
   }
 
   // ── KOS `pageX`（:155-161）─────────────────────────────────────────
@@ -430,6 +445,9 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     _popupClosing = false;
     _portalController.show();
     _popupVisible = true;
+    // popup 打开 → 停 30s 轮换（popup 开着时 [_syncCarouselTimer] 不建表，
+    // 直接 cancel 一次，避免上一张表继续在背后切页；记 deltas）。
+    _carouselTimer?.cancel();
     _popupProgress.value = 0;
     if (_reduceMotion) {
       _popupProgress.value = 1;
@@ -469,6 +487,9 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     if (_portalController.isShowing) _portalController.hide();
     _popupProgress.stop();
     _popupProgress.value = 0;
+    // 被协调器硬切收掉 → 同样恢复轮换表（popup 已不在屏上）。dispose 后
+    // coordinator.release 仍可能触发本方法 → ref.read 前需 mounted 门。
+    if (mounted) _syncCarouselTimer();
   }
 
   // ── 行内容构建 ──────────────────────────────────────────────────
@@ -495,8 +516,11 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     ),
     clockPage => DockClockCard(
       data: DockClockCardData(
-        // services.clock 有值用流值；fake 恒值/无值时用自建 1Hz tick。
-        now: ref.read(widget.services.clock).value ?? _clockNow,
+        // KOS `SystemClock precision: Seconds`（DockInfoPopup.qml:41-44 /
+        // DockClockWidget.qml:27-30）→ 本端 1Hz `_clockNow`（`_clockTicker`
+        // 每秒 setState）等价；`services.clock` 是分钟级快照流，对 HH:mm:ss
+        // 的秒字段无价值且会盖住秒级 tick → 不取（记 deltas）。
+        now: _clockNow,
         sunrise: weather?.sunrise ?? '--:--',
         sunset: weather?.sunset ?? '--:--',
       ),
@@ -635,11 +659,13 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     final output = (monitorBounds ?? (Offset.zero & layout.overlaySize))
         .intersect(Offset.zero & layout.overlaySize);
     if (output.isEmpty) return const SizedBox.shrink();
-    final now = ref.read(widget.services.clock).value ?? _clockNow;
+    // KOS `SystemClock precision: Seconds`（DockInfoPopup.qml:41-44 /
+    // DockClockWidget.qml:27-30）→ 详情行 `now` 同样用 1Hz `_clockNow`；
+    // `services.clock` 分钟级流对 HH:mm:ss 秒字段无价值故不取（记 deltas）。
+    final now = _clockNow;
     return DockInfoOverlay(
       anchor: anchor,
       output: output,
-      overlaySize: layout.overlaySize,
       progress: _popupProgress,
       content: _popupContent(
         _popupPage >= 0 ? _popupPage : _page,
@@ -649,7 +675,6 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
         metrics: metricsSnapshot,
         cpuFraction: cpuFraction,
       ),
-      onDismiss: _closePopup,
       // KOS `pointerInside`（DockInfoPopup.qml:22,219-221）：进 popup 取消
       // closeDelay，出 popup 且槽不 hover → 重启 closeDelay。
       onPointerInsideChanged: (inside) {

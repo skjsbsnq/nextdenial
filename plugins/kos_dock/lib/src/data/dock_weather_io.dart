@@ -160,6 +160,53 @@ final class FileDockWeatherStateStore implements DockWeatherStateStore {
     }
   }
 }
+/// deskcenter `weather.json` 的 location 读取器（CONSTRAINTS §10 接口/IO
+/// 分离）：**只读** deskcenter 的状态文件提取 `location` 子对象，不写。
+///
+/// KOS 的 weather 是 shell 全局 `WeatherService`，城市由 deskcenter 设置
+/// 页写入 `$XDG_STATE_HOME/denial/kos_deskcenter/weather.json`
+/// （kos_deskcenter `weather_provider.dart:294-307`）；本端经文件复用该
+/// 设置（记 docs/visual-deltas.md）。路径优先 `KOS_PIM_STORAGE_DIR`（非空
+/// → `$dir/weather.json`）→ `$XDG_STATE_HOME/denial/kos_deskcenter/
+/// weather.json` → `$HOME/.local/state/denial/kos_deskcenter/weather.json`。
+final class FileDockDeskCenterLocationSource
+    implements DockDeskCenterLocationSource {
+  FileDockDeskCenterLocationSource({
+    String? path,
+    Map<String, String>? environment,
+  }) : path = path ?? _defaultPath(environment ?? Platform.environment);
+
+  final String path;
+
+  /// deskcenter 状态文件路径（与 kos_deskcenter `weather_provider.dart`
+  /// `_defaultStatePath` :294-307 同序）：`KOS_PIM_STORAGE_DIR` →
+  /// `$XDG_STATE_HOME/denial/kos_deskcenter` → `$HOME/.local/state/...`。
+  static String _defaultPath(Map<String, String> env) {
+    final storageDir = env['KOS_PIM_STORAGE_DIR'];
+    if (storageDir != null && storageDir.isNotEmpty) {
+      return '$storageDir/weather.json';
+    }
+    final stateHome = (env['XDG_STATE_HOME']?.isNotEmpty ?? false)
+        ? env['XDG_STATE_HOME']!
+        : '${env['HOME'] ?? Directory.current.path}/.local/state';
+    return '$stateHome/denial/kos_deskcenter/weather.json';
+  }
+
+  @override
+  Future<Map<String, Object?>?> read() async {
+    try {
+      final file = File(path);
+      if (!await file.exists()) return null;
+      final decoded = jsonDecode(await file.readAsString());
+      if (decoded is Map) {
+        return decoded.map((k, v) => MapEntry(k.toString(), v));
+      }
+    } on Object {
+      // Missing/corrupt → null（回退链交 `_loadLocation` 处理）。
+    }
+    return null;
+  }
+}
 
 /// Dock weather provider backed by Open-Meteo.
 ///
@@ -171,17 +218,22 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
   OpenMeteoDockWeatherProvider({
     DockWeatherHttpGet? httpGet,
     DockWeatherStateStore? stateStore,
+    DockDeskCenterLocationSource? deskCenterLocationSource,
     DateTime Function()? now,
     this.refreshInterval = kDockWeatherRefreshInterval,
     this.staleInterval = kDockWeatherStaleInterval,
     this.requestTimeout = kDockWeatherRequestTimeout,
-  })  : _httpGet = httpGet ?? _defaultHttpGet,
-        _stateStore = stateStore ?? FileDockWeatherStateStore(),
-        _now = now ?? DateTime.now;
+  }) : _httpGet = httpGet ?? _defaultHttpGet,
+       _stateStore = stateStore ?? FileDockWeatherStateStore(),
+       _deskCenterLocationSource =
+           deskCenterLocationSource ?? FileDockDeskCenterLocationSource(),
+       _now = now ?? DateTime.now;
 
   final DockWeatherHttpGet _httpGet;
   final DockWeatherStateStore _stateStore;
+  final DockDeskCenterLocationSource _deskCenterLocationSource;
   final DateTime Function() _now;
+
 
   /// weather.go:26-28.
   final Duration refreshInterval;
@@ -358,17 +410,26 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
     );
   }
 
-  /// Restores persisted state (`weather.json`): `location` sub-object (or
-  /// flat top-level fields) + a ready snapshot cache; corrupt → 长沙 default.
+  /// 位置回退链（KOS weather.go:151-154 的 fallback 扩展）：
+  /// **deskcenter `weather.json` 的 `location` 优先**（KOS 的 weather 是
+  /// shell 全局 `WeatherService`，城市由 deskcenter 设置页写共享状态文件，
+  /// kos_deskcenter `weather_provider.dart:294-307`；本端经
+  /// [DockDeskCenterLocationSource] 复用该设置，记 docs/visual-deltas.md）
+  /// → dock 自己的 `weather.json`（`location` 子对象或顶层平铺旧格式 +
+  /// ready 快照缓存恢复）→ `kDockWeatherDefaultLocation`（长沙）。
   Future<DockWeatherLocation> _loadLocation() async {
+    // dock 自己的 `weather.json`：位置兜底 + ready 快照缓存恢复
+    // （weather.go durable-state 等价；快照恢复与位置来源无关——deskcenter
+    // 位置胜出时旧缓存仍先顶着显示，refresh 立即覆盖）。
     final map = await _stateStore.read();
+    DockWeatherLocation? dockLocation;
     if (map != null) {
       final locationJson = switch (map['location']) {
         final Map m => m.map((k, v) => MapEntry(k.toString(), v)),
         _ => map,
       };
-      var location = DockWeatherLocation.fromJson(locationJson);
-      if (!location.valid) location = kDockWeatherDefaultLocation;
+      final parsed = DockWeatherLocation.fromJson(locationJson);
+      if (parsed.valid) dockLocation = parsed;
       // Cached snapshot restore (weather.go durable-state equivalent).
       final restored = DockWeatherSnapshot.fromJson(map);
       if (restored != null) {
@@ -381,9 +442,22 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
           _fetchedAt = DateTime.fromMillisecondsSinceEpoch(fetchedAt);
         }
       }
-      return location;
     }
-    return kDockWeatherDefaultLocation; // weather.go:151-154 fallback
+    // deskcenter 共享设置优先（`location` 子对象字段与
+    // `DockWeatherLocation.fromJson` 兼容：id/name/admin1/country/
+    // countryCode/latitude/longitude/timezone；兼容顶层平铺旧格式）。
+    final deskCenterMap = await _deskCenterLocationSource.read();
+    if (deskCenterMap != null) {
+      final locationJson = switch (deskCenterMap['location']) {
+        final Map m => m.map((k, v) => MapEntry(k.toString(), v)),
+        _ => deskCenterMap,
+      };
+      final location = DockWeatherLocation.fromJson(locationJson);
+      if (location.valid) return location;
+      // deskcenter 文件存在但 location 无效 → 继续走 dock 兜底。
+    }
+    return dockLocation ??
+        kDockWeatherDefaultLocation; // weather.go:151-154 fallback
   }
 
   /// Persists the `WeatherState` subset: location + fetchedAt + snapshot.

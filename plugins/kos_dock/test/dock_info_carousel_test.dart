@@ -649,18 +649,26 @@ void main() {
   });
 
   group('每卡降级', () {
-    testWidgets('clock 无 tick（services.clock 无值）→ 自建 Timer 仍出 HH:mm:ss',
+    testWidgets('clock `now` 恒用 1Hz `_clockNow`（services.clock 分钟流不取）',
         (tester) async {
       final services = _FakeShellServices(); // clockValue null
       await tester.pumpWidget(
         _wrapCarousel(services: services, prefs: _prefs(['clock'])),
       );
       await _settle(tester);
+      // 取首帧 HH:mm:ss，再 pump 1s → 文本必须变化（秒级 tick 真在走）。
+      final first = tester
+          .widget<Text>(
+            find.textContaining(RegExp(r'^\d{2}:\d{2}:\d{2}$')),
+          )
+          .data!;
       await tester.pump(const Duration(seconds: 1));
-      expect(
-        find.textContaining(RegExp(r'^\d{2}:\d{2}:\d{2}$')),
-        findsOneWidget,
-      );
+      final second = tester
+          .widget<Text>(
+            find.textContaining(RegExp(r'^\d{2}:\d{2}:\d{2}$')),
+          )
+          .data!;
+      expect(second, isNot(first));
       expect(find.byType(DockClockCard), findsOneWidget);
     });
 
@@ -1147,7 +1155,9 @@ void main() {
       expect(_frontPage(tester, const [0, 1, 2, 3]), 0); // 环绕到 music
     });
 
-    testWidgets('popup 已开 → 切页后面板内容跟随新页（C5）', (tester) async {
+    testWidgets('popup 已开 → 30s 轮换暂停、面板不跟随切页（修复项 2）', (
+      tester,
+    ) async {
       final services = _FakeShellServices(mediaState: _playingState());
       await tester.pumpWidget(
         _wrapCarousel(
@@ -1164,11 +1174,28 @@ void main() {
       expect(find.byType(DockInfoPanel), findsOneWidget);
       expect(find.text('时钟'), findsOneWidget);
 
-      // 30s 轮换切页（未 hover，计时器在跑）→ 面板内容换成 metrics 页。
+      // popup 开着时 `_syncCarouselTimer` 不建表 + `_followPopupPage` 冻结：
+      // 30s 后卡槽仍在 clock、面板仍显示「时钟」（修复项 2：曾轮换跳
+      // metrics 且面板被带走；记 deltas——KOS popup 跟随 hoveredPage）。
       await tester.pump(const Duration(seconds: 30));
       expect(find.byType(DockInfoPanel), findsOneWidget);
-      expect(find.text('资源占用'), findsOneWidget);
-      expect(find.text('时钟'), findsNothing);
+      expect(find.text('时钟'), findsOneWidget);
+      expect(find.text('资源占用'), findsNothing);
+      expect(_isFront(tester, 2), isTrue); // 轮换没跑
+      // 指针移出（popup 本体与槽都不 hover）→ 260ms closeDelay + 140ms
+      // 退场后 popup 收掉，轮换恢复 → 再过 30s 切到 metrics。
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      addTearDown(gesture.removePointer);
+      // 先 hover 进卡槽（设 `_hovered`），再移出到屏角落 → onExit 触发
+      // `_armPopupClose`。
+      await gesture.moveTo(tester.getCenter(find.byType(DockInfoCarousel)));
+      await tester.pump();
+      await gesture.moveTo(const Offset(2, 2));
+      await tester.pump(const Duration(milliseconds: 260 + 200));
+      expect(find.byType(DockInfoPanel), findsNothing);
+      await tester.pump(const Duration(seconds: 30));
+      expect(_isFront(tester, 3), isTrue); // 轮换恢复 → metrics
     });
   });
 
