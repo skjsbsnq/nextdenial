@@ -56,6 +56,23 @@ class _MemoryDockPreferencesStore implements DockPreferencesStore {
       showTrash: showTrash ?? _prefs.showTrash,
     );
   }
+
+  @override
+  Future<void> writeInfoCards({
+    List<String>? order,
+    bool? autoRotate,
+    String? mode,
+  }) async {
+    // 只改指定项，保留 pinned/可见性/其它信息卡字段（写回后内部状态同步）。
+    _prefs = DockPreferences(
+      pinned: _prefs.pinned,
+      showLauncher: _prefs.showLauncher,
+      showTrash: _prefs.showTrash,
+      infoCardOrder: order ?? _prefs.infoCardOrder,
+      infoCardAutoRotate: autoRotate ?? _prefs.infoCardAutoRotate,
+      infoCardMode: mode ?? _prefs.infoCardMode,
+    );
+  }
 }
 
 class _FakeMediaCommands implements MediaCommands {

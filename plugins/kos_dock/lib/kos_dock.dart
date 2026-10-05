@@ -7,6 +7,7 @@ import 'package:flutter/widgets.dart';
 
 import 'src/theme/dock_tokens.dart' show DockMetrics, DockMetricsScope, kDockBaseHeight;
 import 'src/widgets/dock_shell.dart';
+import 'src/widgets/info_carousel.dart';
 
 /// KOS Dock 表面（`ShellSurface`）：macOS-style 融合 Dock 容器（TASK-02）。
 ///
@@ -125,26 +126,32 @@ final class KosDockPlugin implements ShellSurface {
         monitorId: surface.environment.output.monitorId,
         // TASK-04：launcher/trash 由 KosDockShell 内建（受 showLauncher/
         // showTrash 偏好控制），不再从表面透传占位。
-        // info/tray 占位槽宽随 metrics 反解缩放（SizedBox.shrink 只占位，
-        // 尺寸由 DockMetricsScope 下的 InfoSlotPlaceholder 读取）。
-        infoCard: const _MetricsSlot(info: true),
-        trayAccessory: const _MetricsSlot(info: false),
+        // TASK-05：info 槽挂 `DockInfoCarousel`（4 卡共享槽 + 30s 轮换）——
+        // `KosDockShell` 构建时把全 pill 唯一的 `DockPopupCoordinator`
+        // 注入（详情 popup 与图标预览/菜单共享单例语义）。carousel 内部
+        // 从 `DockMetricsScope` 读反解几何（此处 build 拿不到 Inherited
+        // 上下文）。tray 仍为占位槽（TASK-06 接线）。
+        infoCard: (coordinator) => DockInfoCarousel(
+          services: surface.services,
+          monitorId: surface.environment.output.monitorId,
+          coordinator: coordinator,
+        ),
+        trayAccessory: const _TraySlot(),
       );
 }
 
-/// 占位槽：尺寸 = metrics 的 info 槽宽 / icon slot 方槽（方案 C 起随
+/// 托盘占位槽：尺寸 = metrics 的 icon slot 方槽（方案 C 起随
 /// `DockMetricsScope` 反解缩放；kos_dock.dart 的 build() 拿不到
-/// InheritedWidget 上下文，故透传一个读 scope 的件）。
-class _MetricsSlot extends StatelessWidget {
-  const _MetricsSlot({required this.info});
-
-  final bool info;
+/// InheritedWidget 上下文，故透传一个读 scope 的件）。info 槽 TASK-05 起
+/// 由 `DockInfoCarousel` 填充，不再需要占位。
+class _TraySlot extends StatelessWidget {
+  const _TraySlot();
 
   @override
   Widget build(BuildContext context) {
     final metrics = DockMetricsScope.of(context);
     return SizedBox(
-      width: info ? metrics.infoSlotWidth : metrics.iconSlotSize,
+      width: metrics.iconSlotSize,
       height: metrics.iconSlotSize,
     );
   }

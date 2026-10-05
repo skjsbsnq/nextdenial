@@ -1,8 +1,11 @@
 // TASK-04：启动器 / 垃圾桶图标 + 菜单 + 清空确认弹窗测试。
 //
-// 假 ShellServices / TrashService / DockPreferencesStore 全内存实现
-// （CONSTRAINTS §10：无真实 socket/dbus/dart:io 依赖）；trashServiceProvider
-// 与 dockPreferencesStoreProvider 注入假实现。
+// 假 ShellServices / TrashService / DockPreferencesStore / DockWeatherProvider
+// 全内存实现（CONSTRAINTS §10：无真实 socket/dbus/dart:io 依赖）；
+// trashServiceProvider / dockPreferencesStoreProvider /
+// dockWeatherProviderProvider 均注入假实现（weather 一项是 TASK-05 起
+// `KosDockShell` 在默认四卡 order 下订阅天气快照流所必需——否则会启动真实
+// HttpClient + 状态文件 + 周期 Timer）。
 //
 // 覆盖：launcher tap→toggleLauncher；trash tap→open；右键/长按→菜单两项；
 // 清空→确认弹窗标题；取消不 empty；确认 empty 且关闭；空/非空图标状态；
@@ -60,6 +63,23 @@ class _MemoryDockPreferencesStore implements DockPreferencesStore {
       showTrash: showTrash ?? _prefs.showTrash,
     );
   }
+
+  @override
+  Future<void> writeInfoCards({
+    List<String>? order,
+    bool? autoRotate,
+    String? mode,
+  }) async {
+    // 只改指定项，保留 pinned/可见性/其它信息卡字段（写回后内部状态同步）。
+    _prefs = DockPreferences(
+      pinned: _prefs.pinned,
+      showLauncher: _prefs.showLauncher,
+      showTrash: _prefs.showTrash,
+      infoCardOrder: order ?? _prefs.infoCardOrder,
+      infoCardAutoRotate: autoRotate ?? _prefs.infoCardAutoRotate,
+      infoCardMode: mode ?? _prefs.infoCardMode,
+    );
+  }
 }
 
 class _FakeTrashService implements TrashService {
@@ -98,6 +118,29 @@ class _FakeTrashService implements TrashService {
     yield state;
     yield* _changes.stream;
   }
+}
+
+/// 天气假实现（TASK-05 起 `KosDockShell` 在 `infoCardOrder` 含 weather（默认
+/// 四卡）时订阅 `dockWeatherSnapshotProvider`，其默认实现会 `start()` 真实
+/// provider：HttpClient + 状态文件 + 1min 周期 Timer）。`snapshots` 恒空 →
+/// weatherAvailable false，与真实 provider 首帧（loading、无 ready 快照）等效；
+/// 零真实 IO，见 CONSTRAINTS §10。
+class _FakeWeatherProvider implements DockWeatherProvider {
+  @override
+  DockWeatherSnapshot? get latest => null;
+
+  @override
+  Stream<DockWeatherSnapshot> get snapshots =>
+      const Stream<DockWeatherSnapshot>.empty();
+
+  @override
+  Future<void> start() async {}
+
+  @override
+  Future<DockWeatherSnapshot?> refresh() async => null;
+
+  @override
+  void dispose() {}
 }
 
 class _FakeMediaCommands implements MediaCommands {
@@ -300,6 +343,10 @@ Widget _wrap(
   overrides: [
     dockPreferencesStoreProvider.overrideWithValue(store),
     trashServiceProvider.overrideWithValue(trash),
+    // TASK-05：`KosDockShell` 在默认四卡 order 下会订阅
+    // `dockWeatherSnapshotProvider` → 注入假天气实现，否则默认实现会
+    // `start()` 真实 HttpClient + 状态文件 + 周期 Timer（CONSTRAINTS §10）。
+    dockWeatherProviderProvider.overrideWithValue(_FakeWeatherProvider()),
   ],
   child: MaterialApp(
     home: ShellTheme(

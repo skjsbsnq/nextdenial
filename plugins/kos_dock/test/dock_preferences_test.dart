@@ -64,6 +64,7 @@ class _MemoryStore implements DockPreferencesStore {
   DockPreferences preferences;
   int writePinsCalls = 0;
   int writeVisibilityCalls = 0;
+  int writeInfoCardsCalls = 0;
 
   @override
   Future<DockPreferences> read() async => preferences;
@@ -85,6 +86,27 @@ class _MemoryStore implements DockPreferencesStore {
       pinned: preferences.pinned,
       showLauncher: showLauncher ?? preferences.showLauncher,
       showTrash: showTrash ?? preferences.showTrash,
+      infoCardOrder: preferences.infoCardOrder,
+      infoCardAutoRotate: preferences.infoCardAutoRotate,
+      infoCardMode: preferences.infoCardMode,
+    );
+  }
+
+  @override
+  Future<void> writeInfoCards({
+    List<String>? order,
+    bool? autoRotate,
+    String? mode,
+  }) async {
+    writeInfoCardsCalls++;
+    // 只改指定项（null = 不改），保留 pinned/可见性/其它信息卡字段。
+    preferences = DockPreferences(
+      pinned: preferences.pinned,
+      showLauncher: preferences.showLauncher,
+      showTrash: preferences.showTrash,
+      infoCardOrder: order ?? preferences.infoCardOrder,
+      infoCardAutoRotate: autoRotate ?? preferences.infoCardAutoRotate,
+      infoCardMode: mode ?? preferences.infoCardMode,
     );
   }
 }
@@ -96,6 +118,17 @@ void main() {
       expect(normalizeApplicationId('Firefox.desktop'), 'firefox');
       expect(normalizeApplicationId('org.kde.Kate'), 'org.kde.kate');
       expect(normalizeApplicationId(''), '');
+    });
+  });
+
+  group('dockInfoCardNeedsWeather（天气订阅同源判据）', () {
+    test('含 weather 或含 clock → 需要天气快照；其余 → 不需要', () {
+      expect(dockInfoCardNeedsWeather(const ['weather']), isTrue);
+      expect(dockInfoCardNeedsWeather(const ['clock', 'metrics']), isTrue);
+      expect(dockInfoCardNeedsWeather(const ['metrics', 'weather']), isTrue);
+      // clock 页的日出/日落读同一快照 → 不能被 weather-only 条件门控。
+      expect(dockInfoCardNeedsWeather(const ['music', 'metrics']), isFalse);
+      expect(dockInfoCardNeedsWeather(const <String>[]), isFalse);
     });
   });
 

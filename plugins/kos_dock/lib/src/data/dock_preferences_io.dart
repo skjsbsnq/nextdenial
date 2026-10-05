@@ -102,7 +102,25 @@ class FileDockPreferencesStore implements DockPreferencesStore {
     _migratePinsKey(json);
     await _writeJson(json);
   }
-
+  /// 只改指定信息卡字段（null = 不改），保留 pinned/可见性/未知 key。
+  /// `order` 已归一化（未知 id/别名/去重见 [normalizeDockInfoCardOrder]）；
+  /// `mode` 透传落盘（读侧 clamp 语义在 [DockPreferences.fromJson]）。
+  ///
+  /// KOS: dock/DockConfigService.qml:259-273（infoCardOrder/infoCardMode/
+  /// infoCardAutoRotate 同文档持久化）。
+  @override
+  Future<void> writeInfoCards({
+    List<String>? order,
+    bool? autoRotate,
+    String? mode,
+  }) async {
+    final json = await _readJson();
+    if (order != null) json['infoCardOrder'] = List.of(order);
+    if (autoRotate != null) json['infoCardAutoRotate'] = autoRotate;
+    if (mode != null) json['infoCardMode'] = mode;
+    _migratePinsKey(json);
+    await _writeJson(json);
+  }
   /// writePins/writeVisibility 共用的 temp+rename 原子写；`_sequence`
   /// 保证同进程连续写不重名（搬自 `taskbar_preferences.dart:95-103`）。
   Future<void> _writeJson(Map<String, dynamic> json) async {

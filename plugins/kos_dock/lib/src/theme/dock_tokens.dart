@@ -910,3 +910,161 @@ const String kDockConfirmBody = '所有项目都将被永久删除。\n此操作
 const String kDockConfirmCancelLabel = '取消';
 const String kDockConfirmEmptyLabel = '清空回收站';
 const String kDockConfirmBusyLabel = '正在处理…';
+
+// ── TASK-05 信息卡区（carousel：clock/weather/metrics/music） ────────────
+
+/// 自动轮播间隔：KOS `carouselTimer` 30s（autoRotate && !expanded &&
+/// availablePageCount>1；KOS 的 `running:` **无 hover 项**——hover 暂停是
+/// 本端按任务卡要求新增的偏差，记 docs/visual-deltas.md）。
+///
+/// KOS: dock/DockInfoCarousel.qml:205-213。
+const Duration kDockInfoCarouselInterval = Duration(seconds: 30);
+
+/// 切页横向滑动时长（x 位移 ±cardWidth）。
+///
+/// KOS: dock/DockInfoCarousel.qml:332（`x` Behavior 260ms OutCubic）。
+const Duration kDockInfoPageSlideDuration = Duration(milliseconds: 260);
+
+/// 切页透明度时长。
+///
+/// KOS: dock/DockInfoCarousel.qml:333（`opacity` Behavior 220ms OutCubic）。
+const Duration kDockInfoPageFadeDuration = Duration(milliseconds: 220);
+
+/// 滚轮切页冷却（wheel handler debounce）。
+///
+/// KOS: dock/DockInfoCarousel.qml:215-235（wheelCooldown 180ms + MouseArea
+/// onWheel）；KOS 方向 `delta>=0?-1:1`（:231）本端取反（deltaY>0 → 下一页，
+/// 记 docs/visual-deltas.md）。
+const Duration kDockInfoWheelCooldown = Duration(milliseconds: 180);
+
+/// hover 打开详情 popup 的 dwell 延迟 / 指针移出后的关闭延迟。
+///
+/// KOS: dock/DockInfoCarousel.qml:279-312（openTimer 420ms / closeTimer
+/// 260ms；DockMusicPlayer.qml:88-107 同节奏经 DockMusicPopup）。
+const Duration kDockInfoPopupOpenDelay = Duration(milliseconds: 420);
+const Duration kDockInfoPopupCloseDelay = Duration(milliseconds: 260);
+
+/// DockInfoPopup 面板宽/行高/圆角（px）。
+///
+/// KOS: dock/DockInfoPopup.qml:27-28（width 288 / rowHeight 26）、
+/// :132（radius 18）、:140-148（padding 16/12、spacing 6）、:150-215
+/// （标题 14 DemiBold + 分隔线 + 行 label 12@0.62 / value 13 DemiBold）。
+const double kDockInfoPopupWidth = 288;
+const double kDockInfoPopupRowHeight = 26;
+const double kDockInfoPopupRadius = 18;
+const double kDockInfoPopupPaddingH = 16;
+const double kDockInfoPopupPaddingV = 12;
+const double kDockInfoPopupRowSpacing = 6;
+const double kDockInfoPopupTitleSize = 14;
+const double kDockInfoPopupLabelSize = 12;
+const double kDockInfoPopupValueSize = 13;
+const double kDockInfoPopupLabelAlpha = 0.62;
+
+/// DockInfoPopup 锚定偏移：面板底边贴 carousel 槽顶 −12px。
+///
+/// KOS: dock/DockInfoPopup.qml:34-39（`anchor.margins.top: -12`；
+/// DockWindowPreview.qml:215 用 `anchors.margins: preview.rowPadding`
+/// 同式，取值由面板 padding 决定）。
+const double kDockInfoPopupGap = 12;
+
+/// DockInfoPopup 高公式：标题 + 分隔线 + rows*rowHeight + 上下 padding。
+///
+/// KOS: dock/DockInfoPopup.qml:28 + :140-148 — `height = rowCount*26 + 62`
+/// （62 = title 18 + divider 1 + 2*12 padding + spacing 6 + 尾部 13）。
+const double kDockInfoPopupBaseHeight = 62;
+
+/// carousel 槽宽相对 iconSize 的外延比：`widthUnits*iconSize + iconSize*0.2`
+/// 中 cardGap=iconSize*0.2 是卡背相对内容的左右外延。
+///
+/// KOS: dock/DockInfoCarousel.qml:56（`iconSize*widthUnits + iconSize*0.2`）。
+const double kDockInfoCardGapRatio = 0.2;
+
+/// carousel 槽高比：`iconSize*1.2` 容纳卡背上下外延。
+///
+/// KOS: dock/DockInfoCarousel.qml:57（`height: iconSize * 1.2`）。
+const double kDockInfoSlotHeightRatio = 1.2;
+
+/// 卡背圆角比：squircle → `BorderRadius.circular(iconSize*0.35)` 退化
+/// （记 docs/visual-deltas.md）。
+///
+/// KOS: 四张卡背的 `radius: iconSize * 0.35`（dock/DockClockWidget.qml:102、
+/// DockWeatherWidget.qml:50、DockTemperatureWidget.qml:53、
+/// DockMusicPlayer.qml:135）。
+const double kDockInfoCardRadiusRatio = 0.35;
+
+/// 时钟卡紧凑阈值：iconSize<32 单行 `HH:mm · 日落`。
+///
+/// KOS: dock/DockClockWidget.qml（`compact: iconSize < 32` :22、compact 行
+/// :272-306）。
+const double kDockClockCompactThreshold = 32;
+
+/// 时钟主行字号比 / 日期行字号比 / 最低主字号。
+///
+/// KOS: dock/DockClockWidget.qml — HH:mm:ss `iconSize*0.43` DemiBold 下限 16；
+/// `yyyy年M月d日 周X` `iconSize*0.21` Medium @0.82。
+const double kDockClockTimeFontRatio = 0.43;
+const double kDockClockDateFontRatio = 0.21;
+const double kDockClockDateAlpha = 0.82;
+const double kDockClockTimeMinFont = 16;
+
+/// 音乐卡紧凑阈值：iconSize<36 时封面叠播停钮 + 单行滚动 metadata。
+///
+/// KOS: dock/DockMusicPlayer.qml:31（`isCompact = iconSize < 36`）。
+const double kDockMusicCompactThreshold = 36;
+
+/// 音乐卡竖向内边距：`round(iconSize*0.25)`。
+///
+/// KOS: dock/DockMusicPlayer.qml:30 — vPadding = round(iconSize*0.25)。
+const double kDockMusicVPaddingRatio = 0.25;
+
+/// 音乐控制钮尺寸（px）：prev/next 24、play 27。
+///
+/// KOS: common/MediaControlButton.qml / dock/DockMusicPlayer.qml:392-397 —
+/// prev/next ~24px、play ~27px 圆形钮。
+const double kDockMusicNavButtonSize = 24;
+const double kDockMusicPlayButtonSize = 27;
+
+/// 音乐卡 full marquee 节奏（KOS `trackScroll`）：停留 1200ms → 线性滚动
+/// `max(900, 溢出px*35)`ms → 停留 800ms → 归零。
+///
+/// KOS: dock/DockMusicPlayer.qml:259-282（PauseAnimation 1200ms /
+/// NumberAnimation Linear / PauseAnimation 800ms 的循环）。
+const int kDockMusicMarqueePauseStartMs = 1200;
+const int kDockMusicMarqueePauseEndMs = 800;
+const double kDockMusicMarqueeMinDurationMs = 900;
+const double kDockMusicMarqueeSpeed = 35;
+
+/// 音乐卡 compact marquee 节奏（KOS `compactTrackScroll`）：停留 900ms →
+/// 线性滚动 `max(800, 溢出px*32)`ms → 停留 650ms → 归零。
+///
+/// KOS: dock/DockMusicPlayer.qml:356-379。
+const int kDockMusicCompactMarqueePauseStartMs = 900;
+const int kDockMusicCompactMarqueePauseEndMs = 650;
+const double kDockMusicCompactMarqueeMinDurationMs = 800;
+const double kDockMusicCompactMarqueeSpeed = 32;
+
+/// metrics 三环半径比（外 CPU / 中 memory / 内 storage）与环宽比。
+///
+/// KOS: dock/DockTemperatureWidget.qml:203（环宽）、:219-221（半径
+/// 0.39/0.285/0.18）。
+const double kDockMetricsRingOuterRatio = 0.39;
+const double kDockMetricsRingMidRatio = 0.285;
+const double kDockMetricsRingInnerRatio = 0.18;
+const double kDockMetricsRingWidthRatio = 0.075;
+const double kDockMetricsRingMinWidth = 2.4;
+
+/// metrics 三环字面色（KOS 语义环色，任务卡批准保留字面 + 注释行号）。
+///
+/// KOS: dock/DockTemperatureWidget.qml:219-221 — 外环 CPU `#ff375f`、
+/// 中环 memory `#30d158`、内环 storage `#64d2ff`（同 accent 点
+/// `#64d2ff`/#ff6b62 的温度行配色族）。
+const int kDockMetricsRingCpuColor = 0xffff375f;
+const int kDockMetricsRingMemoryColor = 0xff30d158;
+const int kDockMetricsRingStorageColor = 0xff64d2ff;
+
+/// metrics 温度行 accent 点色：均值行 `#64d2ff` / 峰值行 `#ff6b62`
+/// （KOS 字面色；经语义映射走 shellTheme accent / performanceBad，见
+/// metrics_card.dart）。
+///
+/// KOS: dock/DockTemperatureWidget.qml:115,117 温度行 accent 点。
+const int kDockMetricsTempPeakColor = 0xffff6b62;

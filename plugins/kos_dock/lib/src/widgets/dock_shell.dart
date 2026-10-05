@@ -87,10 +87,11 @@ class KosDockShell extends ConsumerStatefulWidget {
   final ShellServices services;
   final int monitorId;
 
-  /// 后续任务挂件：infoCard（music/weather 信息卡，槽宽 =
-  /// `metrics.infoSlotWidth`）、trayAccessory（尾部托盘挂件，槽宽 =
-  /// `metrics.iconSlotSize`）。
-  final Widget? infoCard;
+  /// 信息卡区挂件构造器：`KosDockShell` 持有全 pill 唯一的
+  /// [DockPopupCoordinator]，构建时注入给调用方（TASK-05 `DockInfoCarousel`
+  /// 的详情 popup 走同一单例；KOS `DockModelService.activeDockPopup`）。
+  /// trayAccessory 为尾部托盘挂件（槽宽 = `metrics.iconSlotSize`）。
+  final Widget Function(DockPopupCoordinator coordinator)? infoCard;
   final Widget? trayAccessory;
 
   @override
@@ -137,8 +138,10 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     // desktop_system_bar_components.dart:284-302）提升到 panel 语义：
     // cardFillTop→cardFill 两 stop 经 panelGradient 走面板透明度。
     final accent = ref.watch(shellAccentProvider);
-    final prefs =
-        ref.watch(dockPreferencesProvider).value ?? const DockPreferences();
+    final prefsAsync = ref.watch(dockPreferencesProvider);
+    // 首帧仍是 loading（异步 store 读文件）时退回默认四卡——沿用既有兜底；
+    // 但 weather 快照流的订阅必须等偏好真正读到（见下）。
+    final prefs = prefsAsync.value ?? const DockPreferences();
     // KOS ConfigService.showLauncher/showTrash（DockContainer.qml:532,571
     // `visible: ConfigService.show*`）：false 即时从 Row 与宽度推导中移除。
     final showLauncher = prefs.showLauncher;
@@ -157,9 +160,64 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     // 图标区内部由 DockIconRow 分开渲染；divider 可见性需要两段各自计数。
     final pinnedCount = entries.where((entry) => entry.isPinned).length;
     final runningCount = entryCount - pinnedCount;
-    final infoCard = widget.infoCard;
+    final infoCard = widget.infoCard?.call(_popups);
     final trayAccessory = widget.trayAccessory;
-    final hasInfo = infoCard != null;
+    // KOS `hasInfo = hasAvailableInfo && !hideInfoCarousel`
+    // （DockContainer.qml:143）：`hasAvailableInfo` 由 `infoCardOrder` 与各卡
+    // 数据可用性共同推导（`:46-58`）——clock/metrics 恒可用（metrics 无数据
+    // 也常驻，`:54-56`）、music 需 `services.media.available`、weather 需
+    // `dockWeatherSnapshotProvider` 的 ready 快照（与 `DockInfoCarousel` 同一
+    // provider，保证同帧同源）。**零可用卡即整区隐藏**：order 非空但全是
+    // 不可用卡（如 `['music']` 且无播放器、`['weather']` 首帧未 ready）时不能
+    // 只靠「infoCard 非 null」判定，否则 pill 里会留下 4.2×iconSize 的空槽与
+    // 一条多余 divider2。order 是会话态（`dockPreferencesProvider`），故在
+    // shell 层推导（`place()` 契约层拿不到，保持纯函数）。
+    //
+    // music 可用性**与 order 同源门控**：order 不含 music 时该项恒不可用，并且
+    // 不再订阅 `widget.services.media`（媒体流每次播放状态/进度 tick 都会通知，
+    // 无门控时 order 不含 music 的会话仍会随媒体变化重建整 pill）。carousel
+    // （`info_carousel.dart` build）用**同一表达式**，避免「shell 判
+    // hasInfo=true 而 carousel 认为 music 不可用」的两侧漂移。
+    final mediaAvailable = prefs.infoCardOrder.contains('music')
+        ? ref.watch(widget.services.media).value?.available ?? false
+        : false;
+    // weather 快照流**只在门控打开时才订阅**：门控 = 偏好已真正读到
+    // （`prefsAsync.hasValue`）**且** order 需要天气数据——
+    // [dockInfoCardNeedsWeather] = 「含 `weather` **或** 含 `clock`」
+    // （clock 页的日出/日落行 `_SolarEventRow` 读同一份快照
+    // `weather.sunrise/sunset`，故不能只按 含 `weather` 门控），shell 与
+    // carousel 共用该判据（定义在 `data/dock_preferences.dart`）。
+    //
+    // 为什么必须门控（复审 round-3 缺陷 1：原先「只判 contains('weather')」+
+    // carousel 无条件 watch，门控在生产路径不产生任何效果）：`dockWeather
+    // SnapshotProvider` 一经 watch 就 `start()` 真实 provider
+    // （state/dock_settings.dart:63-67：dart:io HttpClient + 真实状态文件 +
+    // 1min 周期 Timer），且它是 keepAlive（非 autoDispose，
+    // `dock_settings.dart:45-52`）——无条件订阅会让「order 里既没有天气卡也
+    // 没有 clock」的会话照样起网络轮询，且此后不会自行停。`prefsAsync.
+    // hasValue` 是必需的：loading 帧的 `prefs` 是默认四卡兜底（含 weather），
+    // 只判 order 会让**每个**会话在启动帧就构造真实 provider（实测）。
+    // **默认四卡（KOS 同构）恒订阅**，与 KOS `WeatherService` 常驻一致；
+    // 「按卡片集合收敛订阅」是移植期收敛，记 docs/visual-deltas.md TASK-05 节。
+    // 挂 `KosDockShell` 的测试因此必须 override `dockWeatherProviderProvider`。
+    final weatherGate =
+        prefsAsync.hasValue &&
+        dockInfoCardNeedsWeather(prefs.infoCardOrder);
+    final weatherAvailable = weatherGate
+        ? ref.watch(dockWeatherSnapshotProvider).value?.available ?? false
+        : false;
+    final hasAvailableInfo =
+        infoCard != null &&
+        prefs.infoCardOrder.any(
+          (id) => switch (id) {
+            // hasClock（`:52-53`，融合模式 showClock 恒真）/ hasTemperature
+            // （`:54-56`，MetricsService 未就绪也常驻显 `--`）。
+            'clock' || 'metrics' => true,
+            'music' => mediaAvailable,
+            'weather' => weatherAvailable,
+            _ => false,
+          },
+        );
     final hasTray = trayAccessory != null;
 
     // ── 方案 C：KOS iconSize 反解（dock/AdaptiveMath.mjs:62-166 移植，
@@ -170,15 +228,35 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     // maxWidth=width×0.98 已覆盖极窄输出）。cap 上限与 KOS 一致走
     // `maxLengthRatio = 0.98`（AdaptiveMath.mjs:29-30）。
     final stripWidth = MediaQuery.sizeOf(context).width;
-    final metrics = DockMetrics.fromWidth(
+    // KOS `_infoProbeLayout`（DockContainer.qml:127-137）：**带上 carousel**
+    // 先反解一次当探针；探针 iconSize 掉到绝对下限 MIN_ICON_SIZE=18 时摘掉整
+    // 区（`hideInfoCarousel` :138-143——18px 图标下卡片连紧凑字形都放不下，
+    // 摘掉同时把 4 个图标宽还给应用条目）。先探针再决定是为避免「摘掉 → 图标
+    // 变大 → 又出现」的反馈环（KOS 注释 :127-129 同义）。
+    final probeMetrics = DockMetrics.fromWidth(
       stripWidth,
       pinnedCount: pinnedCount,
       runningCount: runningCount,
       showLauncher: showLauncher,
       showTrash: showTrash,
-      hasInfo: hasInfo,
+      hasInfo: hasAvailableInfo,
       hasTray: hasTray,
     );
+    final hasInfo =
+        hasAvailableInfo && probeMetrics.iconSize > kDockMinIconSize.toDouble();
+    // 摘掉时按最终 hasInfo 重新反解（KOS `_layout` 用的就是最终 hasInfo）；
+    // 未摘掉时探针即最终几何，直接复用。
+    final metrics = hasInfo == hasAvailableInfo
+        ? probeMetrics
+        : DockMetrics.fromWidth(
+            stripWidth,
+            pinnedCount: pinnedCount,
+            runningCount: runningCount,
+            showLauncher: showLauncher,
+            showTrash: showTrash,
+            hasInfo: hasInfo,
+            hasTray: hasTray,
+          );
 
     // divider 可见性由 metrics 的同一组静态规则复算（KOS
     // DockContainer.qml:856,912,951 的 `visible:` 绑定；与 fromWidth 内部

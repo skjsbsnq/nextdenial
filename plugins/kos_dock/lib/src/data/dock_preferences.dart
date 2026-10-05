@@ -57,12 +57,81 @@ class PinnedApplication {
 /// `shell/desktop/modules/dock/DockConfigService.qml:620-623`
 /// （`obj.showLauncher !== false`：仅显式 `false` 隐藏；缺失/非 bool
 /// 保留默认可见）。
+/// Dock 信息卡 id 归一化：`temperature` → `metrics`（KOS `normalizedInfoCardOrder`
+/// 的别名规则），其它原样返回（不做 trim/lowercase——id 集合是封闭枚举）。
+///
+/// KOS: dock/DockConfigService.qml:283-352（normalizedInfoCardOrder）。
+String normalizeDockInfoCardId(String id) =>
+    id == 'temperature' ? 'metrics' : id;
+
+/// 已知信息卡 id 集合（KOS `infoCardOrder` 合法值）。
+const Set<String> kDockInfoCardIds = {'music', 'weather', 'clock', 'metrics'};
+
+/// `normalizedInfoCardOrder` 语义：逐条 `temperature`→`metrics` 别名替换、
+/// 未知 id 丢弃、去重，保持入参相对顺序。
+///
+/// KOS: dock/DockConfigService.qml:283-352（未知 id 丢弃 + 去重 + 别名）。
+List<String> normalizeDockInfoCardOrder(Iterable<dynamic> order) {
+  final seen = <String>{};
+  final normalized = <String>[];
+  for (final raw in order) {
+    if (raw is! String) continue;
+    final id = normalizeDockInfoCardId(raw);
+    if (!kDockInfoCardIds.contains(id) || !seen.add(id)) continue;
+    normalized.add(id);
+  }
+  return List.unmodifiable(normalized);
+}
+/// 天气快照订阅门控（`KosDockShell` 与 `DockInfoCarousel` **共用同一判据**，
+/// 避免两处表达式漂移）：order 里**含 `weather` 或含 `clock`** 时才需要天气
+/// 数据——weather 页直接用快照，而 clock 页的日出/日落行走**同一份**快照
+/// （`DockClockWidget.qml:63-92` `SolarEventRow` ← `WeatherService.
+/// sunriseTime/sunsetTime`），因此**不能**只按 `contains('weather')` 门控
+/// （否则「clock 在 order 里、weather 不在」时会退化成日出/日落恒 `--:--`）。
+/// 判据为假（或偏好尚未读到）时不订阅 `dockWeatherSnapshotProvider`，
+/// 其默认实现是真实网络轮询（`state/dock_settings.dart:63-67`）。
+///
+/// **KOS 语义差**（记 docs/visual-deltas.md TASK-05 节）：KOS 侧
+/// `WeatherService` 是 shell 全局常驻服务，与「哪几张信息卡被选中」无关
+/// （`DockContainer.qml:48-49` 只据它决定 weather 卡是否**可用**）；本端把
+/// 订阅本身收敛到卡片集合，属移植期收敛。
+bool dockInfoCardNeedsWeather(List<String> infoCardOrder) =>
+    infoCardOrder.contains('weather') || infoCardOrder.contains('clock');
+
+/// Dock 偏好：pinned 列表 + 启动器/垃圾桶可见性开关 + 信息卡配置。
+///
+/// 容错解析搬自 denial_taskbar `taskbar_preferences.dart:24-48`：非法条目
+/// 跳过、按 `normalizeApplicationId(id)` 去重、未知 JSON key 由 store 层
+/// 写回时保留。
+/// 读取同时接受两种落盘形状（见 [DockPreferences.fromJson]）：旧
+/// `schemaVersion 1` 文档的 `pinned: [{kind:"app", desktopId}]` 与新格式
+/// `pinnedApplications: [{id, appId, name}]`。
+/// `showLauncher`/`showTrash` 对齐 KOS
+/// `shell/desktop/modules/dock/DockConfigService.qml:620-623`
+/// （`obj.showLauncher !== false`：仅显式 `false` 隐藏；缺失/非 bool
+/// 保留默认可见）。
+/// 信息卡字段（TASK-05）：`infoCardOrder` 默认
+/// `[music,weather,clock,metrics]`（DockConfigService.qml:259-273）；
+/// `infoCardAutoRotate` 默认 true（`!== false` 同式）；`infoCardMode` 只读，
+/// 默认 `"carousel"`、非 carousel 值按 carousel 处理（记 visual-deltas）。
 class DockPreferences {
   const DockPreferences({
     this.pinned = const [],
     this.showLauncher = true,
     this.showTrash = true,
+    this.infoCardOrder = kDockInfoCardOrderDefault,
+    this.infoCardAutoRotate = true,
+    this.infoCardMode = 'carousel',
   });
+
+  /// 信息卡默认顺序（KOS: dock/DockInfoCarousel.qml:21
+  /// `cardOrder: ["music","weather","clock","metrics"]`）。
+  static const List<String> kDockInfoCardOrderDefault = [
+    'music',
+    'weather',
+    'clock',
+    'metrics',
+  ];
 
   /// 落盘 schema 版本：store 的每条写路径都写此值（读侧不校验版本，缺
   /// version/未知 version 不影响解析）。
@@ -71,6 +140,21 @@ class DockPreferences {
   final List<PinnedApplication> pinned;
   final bool showLauncher;
   final bool showTrash;
+
+  /// 信息卡顺序（已归一化：`temperature`→`metrics`、未知 id 丢弃、去重）。
+  ///
+  /// 空列表 = info 区整体隐藏（KOS `hasInfo = hasAvailableInfo &&
+  /// !hideInfoCarousel`，dock/DockContainer.qml:57,141-143）：`fromJson` 对
+  /// 键存在且可解析的 order **原样保留（含空）**，`KosDockShell` 据此把
+  /// `hasInfo` 转 false（撤销 info 槽与 divider2）；写路径
+  /// （`DockPreferencesController.updateInfoCardOrder`）同样允许空。
+  final List<String> infoCardOrder;
+
+  /// 自动轮播（`!== false`：仅显式 false 关闭；缺失/非 bool 保留 true）。
+  final bool infoCardAutoRotate;
+
+  /// 信息卡模式（只读；非 `"carousel"` 值按 carousel 处理，记 deltas）。
+  final String infoCardMode;
 
   factory DockPreferences.fromJson(Map<String, dynamic> json) {
     final seen = <String>{};
@@ -93,12 +177,37 @@ class DockPreferences {
         }
       }
     }
+    // 信息卡字段（TASK-05）：`infoCardOrder` 接受 List 或单 String；
+    // `infoCardAutoRotate` 用 `!== false`；`infoCardMode` 只读、非 carousel
+    // 值按 carousel 处理（记 docs/visual-deltas.md）。
+    //
+    // **空 order 语义（KOS「零项 = 隐藏信息卡区」）**：键缺失（或值形状
+    // 不是 List/String 这类可解析序）→ 默认四卡；键存在且可解析时**原样
+    // 保留归一化结果（含空）**——用户删光信息卡后重启不得复活四卡
+    // （KOS `normalizedInfoCardOrder([])` 保持 `[]`，
+    // dock/DockConfigService.qml:266-269,307-317；`hasInfo` 随之 false）。
+    final hasOrderKey = json.containsKey('infoCardOrder');
+    final rawOrder = json['infoCardOrder'];
+    final parsedOrder = normalizeDockInfoCardOrder(
+      rawOrder is List
+          ? rawOrder
+          : rawOrder is String
+          ? [rawOrder]
+          : const [],
+    );
     return DockPreferences(
       pinned: List.unmodifiable(pins),
       // KOS DockConfigService.qml:622-623 `!== false` 语义：只有 JSON 里
       // 显式写了 false 才隐藏；缺失/null/非 bool 一律保留 true。
       showLauncher: json['showLauncher'] != false,
       showTrash: json['showTrash'] != false,
+      infoCardOrder:
+          !hasOrderKey || (rawOrder is! List && rawOrder is! String)
+          ? DockPreferences.kDockInfoCardOrderDefault
+          : parsedOrder,
+      infoCardAutoRotate: json['infoCardAutoRotate'] != false,
+      infoCardMode:
+          json['infoCardMode'] is String ? json['infoCardMode']! as String : 'carousel',
     );
   }
 }
@@ -157,6 +266,18 @@ abstract interface class DockPreferencesStore {
   /// 只改指定的可见性 flag（`null` = 不改）；pinned/另一 flag/未知 key
   /// 由实现层保留（见 `dock_preferences_io.dart`）。
   Future<void> writeVisibility({bool? showLauncher, bool? showTrash});
+
+  /// 只改指定的信息卡字段（`null` = 不改）；pinned/可见性/未知 key 由
+  /// 实现层保留。`order` 写入前已经 [normalizeDockInfoCardOrder] 归一化；
+  /// `mode` 只读透传（实现层原样落盘，读侧 clamp 见 [DockPreferences]）。
+  ///
+  /// KOS: dock/DockConfigService.qml:283-352（addInfoCard/removeInfoCard/
+  /// moveInfoCard 写回同一 JSON 文档）。
+  Future<void> writeInfoCards({
+    List<String>? order,
+    bool? autoRotate,
+    String? mode,
+  });
 }
 
 /// pinned 顺序模型。

@@ -7,7 +7,7 @@
 | 插件 | 说明 | 提供的 Surface |
 | --- | --- | --- |
 | `plugins/kos_deskcenter` | KOS DeskCenter 桌面小部件（时钟 / 天气 / 日历 / 待办 / 系统 / 活动 / 音乐），Dart 重写装箱布局与编辑模式 | `ShellSurface` ×2（desktop 容器 + desktopControls 面板宿主） |
-| ~~`plugins/kos_dock`~~ | （已移除，待重新移植） | — |
+| `plugins/kos_dock` | KOS macOS-style 融合模式悬浮 Dock（pinned/运行图标行、启动器、垃圾桶、窗口预览与菜单、信息卡 carousel）；TASK-06 托盘区待补 | `ShellSurface`（`kos_dock.dock`）+ `ShellWorkArea`（底部条带） |
 
 ## 设计原则
 
