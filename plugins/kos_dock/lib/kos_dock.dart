@@ -1,16 +1,14 @@
 @Plugin()
 library;
 
-import 'dart:math' as math;
-
 import 'package:denial_flutter_sdk/surfaces.dart';
 import 'package:denial_sdk/composition.dart';
 import 'package:flutter/widgets.dart';
 
-import 'src/theme/dock_tokens.dart';
-import 'src/widgets/dock_view.dart';
+import 'src/theme/dock_tokens.dart' show DockMetrics, DockMetricsScope, kDockBaseHeight;
+import 'src/widgets/dock_shell.dart';
 
-/// KOS Dock 表面（`ShellSurface`）：macOS-style 融合 Dock 的骨架实现。
+/// KOS Dock 表面（`ShellSurface`）：macOS-style 融合 Dock 容器（TASK-02）。
 ///
 /// 布局对齐 NextKde `DockWindow.qml`（行号锚定
 /// `/home/wwt/文档/NextKde/shell/desktop/modules/dock/`）：
@@ -23,13 +21,23 @@ import 'src/widgets/dock_view.dart';
 ///   厚度 = dockHeight + edgeMargin + workspaceMargin（源
 ///   DockWindow.qml:93 `height: dockContainer.height + root.edgeMargin +
 ///   root.workspaceMargin`），edgeMargin/workspaceMargin 均取
-///   `max(4, round(dockHeight*0.12))`（floating 模式，:63-64,:68-69）；
-/// - `occupiesDesktop: false`：源 `exclusionMode: Normal`（:27）为 dock
-///   预留空间是 KOS 行为，但 Denial 移植约定 dock 悬浮不挤压工作区
-///   （不实现 ShellWorkArea），仅不把最小化预览推进条带；
-/// - `visible`：对齐 kos_deskcenter 惯例，锁屏/壁纸选择器时隐藏；
-///   fullscreen/overview 不隐藏（macOS dock 全屏时仍可由 reveal 唤出，
-///   自动隐藏本身不在本任务范围）。
+///   `max(4, round(dockHeight*0.12))`（floating 模式，:63-64,:68-69）。
+///   **pill 本体不贴屏幕底边**：条带底边仍是屏幕底边，pill 由
+///   `dock_shell.dart` 的 `Align.bottomCenter` + 底部 [edgeMargin] 内边距
+///   内缩——源 DockWindow.qml:177 `y: root.height - root.edgeMargin -
+///   dockContainer.height`（回归见 `dock_container_test.dart` 的 pill 内缩
+///   用例）；
+/// - `occupiesDesktop: false`：源 `exclusionMode: Normal`（:27）保留的是
+///   最大化的**工作区**（下方 [KosDockWorkArea] 负责预留），与「最小化窗口
+///   预览不进条带」无关——SDK 语义见 surfaces.dart:137-138；
+/// - `visible`：锁屏 / 壁纸选择器 / 全屏时隐藏，其余场景恒可见
+///   （CONSTRAINTS §1：不启用 auto-hide/reveal handle/exclusiveZone）。
+///   全屏门控是 compositor 层级语义：KOS dock 在 `WlrLayer.Top`
+///   （DockWindow.qml:32-34）被全屏窗口盖住，DockAutoHideController 只在
+///   mode!=="always" 才做显隐动画（DockAutoHideController.qml:50,254），
+///   恒可见模式靠层级遮挡；Denial 无此遮挡，由本 surface 按
+///   `environment.fullscreen` 降 visible。例外：overview 打开或
+///   desktopVisible 时仍显示（KOS overview 里 dock 可用）。
 @Provides(ShellSurface)
 final class KosDockPlugin implements ShellSurface {
   const KosDockPlugin();
@@ -44,47 +52,142 @@ final class KosDockPlugin implements ShellSurface {
   /// KOS: dock/DockConfigService.qml:37）。
   static const double dockHeight = kDockBaseHeight;
 
-  /// 玻璃与屏幕边的浮空距（KOS: dock/DockWindow.qml:63-64）。
-  static int get edgeMargin => _floatMargin;
+  /// 契约层条带厚度：由 [DockMetrics] 在基准配置下按输出宽反解。
+  ///
+  /// 方案 C（TASK-04b §6）：pill 高不再是常量——KOS `exclusiveZone =
+  /// dockContainer.height + edgeMargin + workspaceMargin`（dock/
+  /// DockWindow.qml:118-127）三项都绑运行时 dockContainer.height；本端
+  /// 对应 `DockMetrics.stripThickness`。`place()`/`reserve()` 在插件装载
+  /// 契约层，拿不到 `dockPreferencesProvider` 的会话态（place() 是环境的
+  /// 纯函数，SDK 契约见 kos_deskcenter.dart:208 同式说明），故按**基准
+  /// 配置**（launcher+trash 默认开、无运行窗、无 info/tray）对输出宽反解
+  /// ——KOS 同构：DockWindow 的厚度同样由当帧 dock 内容决定，prefs 关闭
+  /// launcher/trash 时条带只少 ~10px 高度差（见 dock_shell.dart 的
+  /// 说明与 docs/visual-deltas.md）。
+  ///
+  /// 注意 KOS `availableLength` 传 `max(baseHeight, …)`（DockContainer.
+  /// qml:130-137,167-170）；`DockMetrics.fromWidth` 内部已把
+  /// `maxWidth = availableLength*0.98` 应用到极窄输出（MIN_ICON_SIZE=18
+  /// 下限 → dockHeight≈25、edgeMargin=4、条带≈33，厚度仍正）。
+  static double thicknessForWidth(double outputWidth) =>
+      DockMetrics.fromWidth(outputWidth).stripThickness;
 
-  /// pill 上缘与最大化窗口间的留白（KOS: dock/DockWindow.qml:68-69）。
-  static int get workspaceMargin => _floatMargin;
-
-  /// floating 模式浮空边距：`max(4, round(dockHeight*0.12))`。
-  static int get _floatMargin => math.max(
-    kDockMinEdgeMargin.toInt(),
-    (dockHeight * kDockEdgeMarginRatio).round(),
-  );
-
-  /// 条带总厚度（KOS: dock/DockWindow.qml:93）。
-  static double get thickness =>
-      dockHeight + edgeMargin + workspaceMargin;
+  /// 基准输出宽（1920 逻辑 px）下的条带厚度；`ShellWorkArea.reserve()` 的
+  /// settings 不携带输出几何，按最大常规输出取上界（更宽的预留 = 更大
+  /// 安全边际，真实条带厚度由 place() 的 [thicknessForWidth] 给）。
+  ///
+  /// KOS: dock/DockWindow.qml:92-93,124-127。
+  static double get thickness => thicknessForWidth(1920);
 
   @override
   ShellSurfacePlacement? place(ShellSurfaceEnvironment environment) {
     return ShellSurfacePlacement(
-      // `custom`：插件自己把 `ShellSurfacePresentation.opacityOf` 喂给
-      // `ShellBackdropBlur(separateChild: true)`（dock_view.dart），SDK 不再
+      // `ShellBackdropBlur(separateChild: true)`（dock_shell.dart），SDK 不再
       // 对子树叠整体 FadeTransition——否则 opacity 被平方（SDK 契约见
       // PLUGIN_DEVELOPMENT.md；惯例对照 denial_taskbar.dart）。
       fade: ShellSurfaceFade.custom,
+      // 条带底边 = 屏幕底边；pill 本体再由 `dock_shell.dart` 内缩
+      // [edgeMargin]（源 DockWindow.qml:177），故不等价于 pill 贴底。
       bounds: ShellSurfacePlacement.edgeBounds(
         // 用 `output.logicalRect` 而非 `workArea`：dock 锚物理输出底边
-        // （KOS DockWindow 锚 screen 底缘）；workArea 已扣 top_bar 独占，
-        // 会把 dock 推上去错位。
+        // （KOS DockWindow 锚 screen 底缘）；workArea 已扣预留条带，
+        // 会把 dock 推上去错位。条带厚度按本输出宽反解（方案 C：
+        // `DockMetrics.stripThickness`，KOS DockWindow.qml:92-93 的
+        // `dockContainer.height + edgeMargin + workspaceMargin`）。
         environment.output.logicalRect,
         PanelEdge.bottom,
-        thickness,
+        thicknessForWidth(environment.output.logicalRect.width),
       ),
-      // 悬浮 dock：不推开最小化窗口预览，不预留工作区。
+      // 只表示「不在本条带内排最小化窗口预览」（SDK 语义
+      // surfaces.dart:137-138）；最大化窗口的工作区预留由 [KosDockWorkArea]
+      // 的 `ShellWorkArea` 负责，与 `place()` 无关。
       occupiesDesktop: false,
-      // 锁屏与壁纸选择器时隐藏（SDK 语义：保留状态淡出 + 抑制输入，
-      // surfaces.dart:134-135）。
-      visible: !environment.locked && !environment.wallpaperSelectorVisible,
+      // 锁屏 / 壁纸选择器时隐藏（SDK 语义：保留状态淡出 + 抑制输入，
+      // surfaces.dart:134-135）；全屏窗口经 compositor 升到高于 dock 的
+      // 层（KOS WlrLayer.Top 被盖，恒可见模式无显隐动画、靠层级遮挡，
+      // DockAutoHideController.qml:50,254），Denial 侧由 surface 按
+      // `environment.fullscreen` 降 visible——除非 overview 打开或
+      // desktopVisible（KOS overview 里 dock 可用）。除此三者外恒可见：
+      // CONSTRAINTS §1 不启用 auto-hide/reveal handle。
+      visible:
+          !environment.locked &&
+          !environment.wallpaperSelectorVisible &&
+          (!environment.fullscreen ||
+              environment.overview ||
+              environment.desktopVisible),
     );
   }
 
   @override
   Widget build(BuildContext context, {required ShellSurfaceContext surface}) =>
-      const KosDockView();
+      KosDockShell(
+        services: surface.services,
+        monitorId: surface.environment.output.monitorId,
+        // TASK-04：launcher/trash 由 KosDockShell 内建（受 showLauncher/
+        // showTrash 偏好控制），不再从表面透传占位。
+        // info/tray 占位槽宽随 metrics 反解缩放（SizedBox.shrink 只占位，
+        // 尺寸由 DockMetricsScope 下的 InfoSlotPlaceholder 读取）。
+        infoCard: const _MetricsSlot(info: true),
+        trayAccessory: const _MetricsSlot(info: false),
+      );
+}
+
+/// 占位槽：尺寸 = metrics 的 info 槽宽 / icon slot 方槽（方案 C 起随
+/// `DockMetricsScope` 反解缩放；kos_dock.dart 的 build() 拿不到
+/// InheritedWidget 上下文，故透传一个读 scope 的件）。
+class _MetricsSlot extends StatelessWidget {
+  const _MetricsSlot({required this.info});
+
+  final bool info;
+
+  @override
+  Widget build(BuildContext context) {
+    final metrics = DockMetricsScope.of(context);
+    return SizedBox(
+      width: info ? metrics.infoSlotWidth : metrics.iconSlotSize,
+      height: metrics.iconSlotSize,
+    );
+  }
+}
+
+/// 底部工作区预留（`ShellWorkArea`）：最大化窗口停在 dock 之上，永不被 dock
+/// 覆盖。
+///
+/// 用户决定（2026-10-04）**覆盖** CONSTRAINTS §2「dock 悬浮不挤压工作区」：
+/// 最大化窗口要浮在 dock 之上、且不要顶部栏（见
+/// `docs/dock-port/CONSTRAINTS.md` §2 修正条目）。本 shell 的工作区条带只有
+/// `ShellWorkArea` 一个扩展点（`denial_desktop` 侧
+/// `lib/src/core/shell_runtime_bindings.dart:131-142` 把预留结果交给
+/// `applyShellConfiguration(side:, systemBarThickness:, maximizePadding:)`），
+/// 参照 denial_taskbar 的 `TaskbarWorkArea`
+/// （`denial_taskbar.dart:49-60`）。
+///
+/// 厚度来源 KOS `dock/DockWindow.qml:118-127`：dock 恒显示时
+/// `exclusiveZone = dockContainer.height + edgeMargin + workspaceMargin`
+/// （= [KosDockPlugin.thickness]），再加用户 `maximizePadding` 呼吸空间
+/// （预留：最大化窗口与 dock 上缘之间不贴边）。
+///
+/// 与 taskbar 的**差异**：taskbar 在 `systemBarSide == hidden`（栏被用户隐藏）
+/// 时返回 `null` 不留条带；KOS dock 恒可见（CONSTRAINTS §1 不启用
+/// auto-hide/reveal handle），只要 dock 在就占位，故这里**无条件**返回预留，
+/// 不看 `settings.systemBarSide`（`top`/`hidden` 都不影响 dock 是否可见）。
+@Provides(ShellWorkArea)
+final class KosDockWorkArea implements ShellWorkArea {
+  const KosDockWorkArea();
+
+  /// 预留厚度 = 条带厚度 + [ShellLayoutSettings.maximizePadding]（非有限或
+  /// 负值按 0 计，避免 `ShellWorkAreaReservation` 抛参数错误）。
+  static double reservationThickness(ShellLayoutSettings settings) {
+    final padding = settings.maximizePadding;
+    return KosDockPlugin.thickness +
+        (padding.isFinite && padding > 0 ? padding : 0.0);
+  }
+
+  @override
+  ShellWorkAreaReservation? reserve(ShellLayoutSettings settings) =>
+      ShellWorkAreaReservation(
+        edge: PanelEdge.bottom,
+        thickness: reservationThickness(settings),
+        outputNames: settings.systemBarOutputNames,
+      );
 }

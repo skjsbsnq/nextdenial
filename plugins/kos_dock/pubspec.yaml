@@ -11,7 +11,7 @@ dependencies:
     sdk: flutter
   denial_sdk: '0.0.0'
   denial_flutter_sdk: '0.0.0'
-dev_dependencies:
+  flutter_riverpod: ^3.3.2
   flutter_test:
     sdk: flutter
   flutter_lints: ^6.0.0
@@ -25,3 +25,12 @@ denial_plugin:
     # 不挤压工作区，故不声明 ShellWorkArea。
     - contract: package:denial_flutter_sdk/surfaces.dart#ShellSurface
       count: 1
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/applauncher.svg
+    # 垃圾桶空/满态（旧 kos_dock 资产，NextKde 源 SVG 栅格化；见
+    # assets/README.md 的来源与 md5 记录）。
+    - assets/icons/trash.png
+    - assets/icons/trash_full.png
