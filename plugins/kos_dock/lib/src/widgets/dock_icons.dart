@@ -142,6 +142,33 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
   /// 不把包络打到 0。
   Timer? _exitDebounce;
 
+  /// 「放大路径激活中」布尔广播给槽内图标（`WaveEnvelope` scope，对齐
+  /// quickshell `directMagnification = requested || progress > 0`，
+  /// DockSurface.qml:104）：指针在容器 / 拖拽中 / `amplitude>0` 塌回期
+  /// 均为 true——图标的 `hasPointer`（`hoverScale` 分支）在包络未归零
+  /// 前不能瞬时回落到「无指针独立 hover 兜底」，否则退出塌回期间美术盒
+  /// scale 叠 ~1.2× Transform.scale（TASK-12 复审缺陷4）。
+  ///
+  /// 驱动：`_setEnvelopeActive` 只在 `_amplitudeTo`（postFrame 回调内）
+  /// 与 `_amplitude` 监听器（tick，均在 build 外）里调用，值不变不写——
+  /// **不在 build 中途写 notifier**（InheritedNotifier 依赖者会被脏标
+  /// 记，同 `_reportLayoutWidth` 必须 postFrame 的原因）。
+  final _waveActive = ValueNotifier<bool>(false);
+
+  /// 振幅包络的目标值（build 侧只读决策字段；`_amplitudeTo` 唯一写）。
+  double _amplitudeTarget = 0;
+
+  /// 更新 `_waveActive`：目标为 1（指针在容器/拖拽中）或 `amplitude>0`
+  /// （塌回中）→ 激活；`amplitude` 触底（塌回/入场结束）时由
+  /// `_onAmplitudeChange` 惰性归零（无 build 内写）。值不变不写。
+  void _setEnvelopeActive() {
+    _waveActive.value = _amplitudeTarget > 0 || _amplitude.value > 0;
+  }
+
+  /// `_amplitude` 监听器：tick 后同步包络布尔（在 build 外，安全写
+  /// notifier）；`amplitude` 真正触底（`==0`）时把 `_waveActive` 归 false。
+  void _onAmplitudeChange() => _setEnvelopeActive();
+
   /// 拖拽预览态：null = 非拖拽。`setState` 变化即改槽位序（
   /// `dockWavePreviewOrder`），不重播入场——槽位 key 绑**条目**不绑槽位
   /// 下标（`_DockEntrance` 的 index 是首次挂载序号，预览换位不触发重播）。
@@ -338,10 +365,15 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
   /// 自建 fallback 时驱动；`disableAnimations` 直写终值不留 ticker
   /// （约束③——flutter_test 恒 true，_exitDebounce 也只在动画开启时跑）。
   void _amplitudeTo(double target) {
+    _amplitudeTarget = target;
+    _setEnvelopeActive();
     if (MediaQuery.disableAnimationsOf(context)) {
       _exitDebounce?.cancel();
       _exitDebounce = null;
       _amplitude.value = target;
+      // 缺陷1 配套：直写终值 0 时包络已到底，`_lastLocalX` 同步丢弃
+      // （不留给下一次 build 的惰性清空——值 0 后该缓存无意义）。
+      if (target <= 0) _lastLocalX = null;
       return;
     }
     if (target <= 0) {
@@ -349,11 +381,14 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
       // 把包络打到 0，吸收 region 抖动。
       _exitDebounce?.cancel();
       _exitDebounce = Timer(kDockWaveExitDebounce, () {
-        if (mounted) {
-          unawaited(
-            _amplitude.animateTo(0, curve: Curves.easeOutCubic),
-          );
-        }
+        if (!mounted) return;
+        // minor①：fire 时若拖拽仍活跃或当前目标已变回 1（防抖期内
+        // pointer 回归/进拖拽 → `_amplitudeTo(1)` 已重定目标），跳过
+        // animateTo(0)——否则 PointerUp 落在防抖窗内会闪一帧 1×。
+        if (_dragPreview != null || _amplitudeTarget > 0) return;
+        unawaited(
+          _amplitude.animateTo(0, curve: Curves.easeOutCubic),
+        );
       });
     } else {
       _exitDebounce?.cancel();
@@ -363,9 +398,11 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
   }
 
   @override
+  @override
   void dispose() {
     _exitDebounce?.cancel();
     _amplitude.dispose();
+    _waveActive.dispose();
     _pointerX.dispose();
     super.dispose();
   }
@@ -380,13 +417,34 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
     _pointerX.value = box.localToGlobal(event.localPosition).dx;
   }
 
+  /// 最后已知的带内局部指针 x：指针离开容器后保留，让退出动画仍有一个
+  /// 有效的 `pointerX` 喂 `dockWaveLayout`——scale 从放大值平滑塌回 1
+  /// （TASK-12 复审缺陷1：onExit 把 `_pointerX` 瞬时置 null → `hasPointer
+  /// =false` → scale 短路 1，220ms 振幅包络跑在一个无消费者的值上）。
+  /// 包络触底（`_amplitude==0`）后在 build 内惰性清空。
+  double? _lastLocalX;
+
   /// 指针 x（全局）→ 带内局部 x：`dockWaveLayout` 的槽坐标系以带的左缘
   /// 为原点（padding=0 起累加），全局 x 减去带左缘的全局 x。
+  ///
+  /// TASK-12 复审缺陷3(c)：换算只锚带盒**左缘**（`Offset(0, height)`），不
+  /// 用 `Offset.zero` 的左上原点——带盒宽 = 当帧 Σspan 随指针/振幅每帧变，
+  /// 而外壳 `Align.centerLeft` 让左缘钉在 pill 内容左缘（静止系不变量）；
+  /// `Offset.zero` 的 y 分量能触发 RenderAligningShiftedBox 的 y 对齐偏移，
+  /// 在带盒换宽的当帧把原点带偏（动画几何回喂 magnification，DockLayout.
+  /// js:16-17 明令禁止）。
+  ///
+  /// 非 null 的局部 x 顺手记入 [_lastLocalX]（quickshell
+  /// `magnificationProgress` 单包络语义，DockSurface.qml:95-103）：指针
+  /// 离开时 `pointerGlobalX` 瞬时变 null，scale 塌回只经 `amplitude` 包络
+  /// 220ms 衰减，局部 x 保持最后已知值直到包络触底（build 内
+  /// `_amplitude.value == 0` 时惰性清空）。
   double? _localPointerX(double? globalX) {
     if (globalX == null) return null;
     final box = _waveBandKey.currentContext?.findRenderObject();
     if (box is! RenderBox || !box.attached) return null;
-    return globalX - box.localToGlobal(Offset.zero).dx;
+    return _lastLocalX =
+        globalX - box.localToGlobal(Offset(0, box.size.height)).dx;
   }
 
   /// 槽位 displayIndex → 移除前 sourceIndex 的置换表。拖拽预览只置换
@@ -411,12 +469,17 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
   }
 
   @override
+  @override
   void initState() {
     super.initState();
     // fallback 路径（无 ambient MagnificationPointer 的独立宿主/单测）：
     // 自建 `_pointerX` 的变化要触发重建以驱动波形与包络。有 ambient 时
     //  InheritedNotifier 依赖已在 build 建立，本监听恒为 no-op。
     _pointerX.addListener(_onFallbackPointer);
+    // 包络布尔广播（`WaveEnvelope`）的触底归零通道：塌回/入场每 tick
+    // 后同步 `_waveActive`（`amplitude` 真触底才归 false；build 外写
+    // notifier 安全）。
+    _amplitude.addListener(_onAmplitudeChange);
   }
 
   void _onFallbackPointer() {
@@ -535,7 +598,12 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
     // 直接读 `_pointerX.value`（`_onFallbackPointer` 监听已建立依赖）。
     final pointerGlobalX =
         ambient ? MagnificationPointer.of(context) : _pointerX.value;
-    final localX = _localPointerX(pointerGlobalX);
+    // TASK-12 复审缺陷1：指针瞬时 null 时保留 `_lastLocalX` 直到包络触底——
+    // scale 塌回由 `amplitude` 唯一驱动（220ms easeOutCubic），`localX` 不
+    // 参与衰减只定位高斯峰。`_localPointerX` 在值非 null 时顺手刷新缓存。
+    final localX =
+        _localPointerX(pointerGlobalX) ??
+        (_amplitude.value > 0 ? _lastLocalX : null);
 
     // 指针在容器 → amplitude 1；离开 → 0（80ms 防抖内不重置，`_amplitudeTo`
     // 内部处理）。拖拽中保持包络（quickshell `magnificationRequested` 含
@@ -550,9 +618,15 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
     // 树被 `SizedBox.shrink()` 换掉的当帧 builder 根本跑不到。
     if (totalCount == 0) _reportLayoutWidth(0);
 
-    if (_amplitude.value != targetAmplitude) {
+    // 判等用「目标」而非「当前值」：`_amplitude.value` 在动画进行中每帧都
+    // ≠ target（这是预期），用它会每帧排 postFrame 反复重启 `animateTo`
+    // ——`AnimationController.animateTo` 断言禁止未 finish 重启 → panic +
+    // 动画被打断成抽搐。只在「意图翻转」时才驱动一次。
+    if (_amplitudeTarget != targetAmplitude) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _amplitudeTo(targetAmplitude);
+        if (mounted && _amplitudeTarget != targetAmplitude) {
+          _amplitudeTo(targetAmplitude);
+        }
       });
     }
 
@@ -732,10 +806,18 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
     final content = AnimatedBuilder(
       animation: _amplitude,
       builder: (context, child) {
+        // 缺陷1：包络真正触底（amplitude==0）后惰性丢弃缓存的局部指针 x——
+        // 触底前的退出动画帧仍需要它定位高斯峰；触底后全槽 scale=1 已回
+        // 静止布局，缓存无意义（避免长期持有过期指针位影响后续进场帧）。
+        final framePointerX =
+            _dragPreview != null && _dragPointer != null
+                ? _dragPointer!.dx
+                : localX;
+        if (_amplitude.value == 0 && pointerGlobalX == null) {
+          _lastLocalX = null;
+        }
         final frameSlots = layoutSlots(
-          pointerX: _dragPreview != null && _dragPointer != null
-              ? _dragPointer!.dx
-              : localX,
+          pointerX: framePointerX,
           amplitude: _amplitude.value,
         );
         final width = frameSlots.isEmpty
@@ -841,7 +923,9 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
     // TASK-04：指针广播上移到 KosDockShell（覆盖 launcher/trash/pinned
     // 整个 pill 内容 Row）。有 ambient 时直接消费，行内不再重复自建；
     // 无 ambient（独立宿主/单测）保留自建 fallback MouseRegion + 包络。
-    if (ambient) return body;
+    if (ambient) {
+      return WaveEnvelope(active: _waveActive, child: body);
+    }
     return MouseRegion(
       key: _pointerRegionKey,
       onHover: _broadcastPointer,
@@ -849,7 +933,10 @@ class _DockIconRowState extends ConsumerState<DockIconRow>
         _pointerX.value = null;
         _amplitudeTo(0); // fallback 路径自带退出包络。
       },
-      child: MagnificationPointer(pointerX: _pointerX, child: body),
+      child: MagnificationPointer(
+        pointerX: _pointerX,
+        child: WaveEnvelope(active: _waveActive, child: body),
+      ),
     );
   }
 

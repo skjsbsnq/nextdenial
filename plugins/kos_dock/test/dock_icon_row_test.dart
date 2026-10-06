@@ -785,6 +785,87 @@ void main() {
       await tester.pump();
     });
 
+    testWidgets('TASK-12 复审缺陷1：指针离开后放大不瞬时归零（包络驱动塌回）',
+        (tester) async {
+      final services = _FakeShellServices()..apps = _apps;
+      final store = _MemoryDockPreferencesStore(
+        DockPreferences(pinned: [_pin(_apps[0]), _pin(_apps[1])]),
+      );
+      // 需要真动画：包络塌回是 animateTo(0)（220ms easeOutCubic + 80ms 退出
+      // 防抖）——flutter_test 默认 disableAnimations=true 下 `_amplitudeTo`
+      // 直写终值无塌回过程可断言；`_DockEntrance` 同式直落终态。
+      await tester.pumpWidget(
+        ProviderScope(
+          overrides: [dockPreferencesStoreProvider.overrideWithValue(store)],
+          child: MaterialApp(
+            home: MediaQuery(
+              data: const MediaQueryData(disableAnimations: false),
+              child: ShellTheme(
+                data: const ShellThemeData(),
+                child: SizedBox(
+                  width: 800,
+                  height: kDockBaseHeight,
+                  child: DockIconRow(monitorId: 0, services: services),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+      // `_DockEntrance`（60ms×index + snappy spring）与后续包络衰减都要分
+      // 帧推进——flutter_test 的虚拟时钟需要逐帧 pump 驱动 ticker。
+      for (var i = 0; i < 90; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final icons = find.byType(DockIcon);
+      final fb = DockMetricsScope.fallback;
+
+      // 指针放 0 号槽中心 → 包络 animateTo(1) 220ms 到满幅放大。
+      // `_amplitudeTo(1)` 走 postFrame——先一帧触发调度，再分帧推 220ms。
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      await gesture.moveTo(tester.getCenter(icons.at(0)));
+      await tester.pump();
+      for (var i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final magnified = tester.getRect(icons.at(0)).height;
+      expect(magnified, greaterThan(fb.iconSlotSize + 1));
+
+      // 指针离开容器：pointerX 瞬时变 null，包络经 80ms 退出防抖后才
+      // animateTo(0)——缺陷1 回归：scale 塌回唯一经 amplitude 项衰减，
+      // 防抖期内槽高必须仍接近放大值而非瞬回 iconSlotSize。
+      await gesture.moveTo(const Offset(-4000, -4000));
+      await tester.pump(const Duration(milliseconds: 50));
+      expect(
+        tester.getRect(icons.at(0)).height,
+        greaterThan(fb.iconSlotSize + 1),
+        reason: 'onExit 后 50ms（80ms 退出防抖期内）槽高不能瞬回静止值——'
+            '`_lastLocalX` 保留最后指针位喂高斯峰，塌回由 amplitude 包络驱动',
+      );
+      // 防抖 80ms 过后 + 220ms 包络衰减中（再推 ~150ms 分帧）：仍在塌回
+      // 途中——介于满幅与静止之间（瞬时归零会立即等于 iconSlotSize）。
+      for (var i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      final midDecay = tester.getRect(icons.at(0)).height;
+      expect(midDecay, lessThan(magnified));
+      expect(
+        midDecay,
+        greaterThan(fb.iconSlotSize + 0.5),
+        reason: 'easeOutCubic 塌回中途：槽高介于放大值与静止值之间',
+      );
+      // 衰减完毕 → 回到静止（`_lastLocalX` 随包络触底惰性清空）。
+      for (var i = 0; i < 30; i++) {
+        await tester.pump(const Duration(milliseconds: 16));
+      }
+      expect(
+        tester.getRect(icons.at(0)).height,
+        closeTo(fb.iconSlotSize, 0.01),
+      );
+      await gesture.removePointer();
+    });
+
   group('未 pin 的运行应用（KOS grouped；CONSTRAINTS §5 修正）', () {
     testWidgets('空 pinned + 有运行窗口 → 行非空（用户报告的场景）', (tester) async {
       final services = _FakeShellServices()

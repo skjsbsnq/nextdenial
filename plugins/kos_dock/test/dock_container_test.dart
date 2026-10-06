@@ -940,6 +940,67 @@ void main() {
       );
     });
 
+    testWidgets('TASK-12 复审缺陷2/3(a)：带层在 ClipRRect 子树之外、'
+        '热区厚度恒 = dockHeight', (tester) async {
+      final services = _FakeShellServices()..apps = _apps;
+      final store = _MemoryDockPreferencesStore(
+        DockPreferences(pinned: [_pin(_apps[0]), _pin(_apps[1])]),
+      );
+      await tester.pumpWidget(_wrap(services, store));
+      await _settle(tester);
+
+      // 缺陷2：dock.pinned 带层必须是 ShellBackdropBlur 的**兄弟**而非
+      // 后代——SDK 末端 ClipRRect 跟子树尺寸走，带层在其内则放大探出
+      // pill 顶缘的部分被 59px 高的圆角框裁掉（绘制+命中双裁）。
+      final band = find.byKey(const Key('dock.pinned'));
+      expect(band, findsOneWidget);
+      expect(
+        find.descendant(
+          of: find.byType(ShellBackdropBlur),
+          matching: band,
+        ),
+        findsNothing,
+        reason: '图标带层必须移出 ShellBackdropBlur/ClipRRect 子树',
+      );
+
+      // 缺陷3(a)：带层 MouseRegion 的热区厚度恒 = dockHeight——
+      // quickshell `DockItem.qml:190-199` pointerArea 显式排除 headroom：
+      // headroom 空白不吃 hover（放大图标探入的部分仍可命中，那是图标自
+      // 身的 hit 而非 region 空白）。
+      final metrics = DockMetrics.fromWidth(
+        800,
+        pinnedCount: 2,
+      );
+      final regionRect = tester.getRect(
+        find.ancestor(
+          of: band,
+          matching: find.byWidgetPredicate(
+            (w) => w is MouseRegion && w.onExit != null,
+          ),
+        ),
+      );
+      expect(
+        regionRect.height,
+        closeTo(metrics.dockHeight, 0.01),
+        reason: '带层 MouseRegion 热区厚度必须恒 = dockHeight（非 '
+            'dockHeight+headroom）',
+      );
+      // 底缘贴 pill 底（Positioned bottom:0）。
+      final pill = tester.getRect(_pill());
+      expect(regionRect.bottom, closeTo(pill.bottom, 0.5));
+      // 带内容（OverflowBox 后的 dock.pinned 盒）比热区高 = headroom：
+      // 视觉通路向上放 headroom，hit 盒不收。
+      expect(
+        tester.getRect(band).height,
+        greaterThan(metrics.dockHeight),
+        reason: '带内容盒 = dockHeight+headroom（视觉通路），大于 hit 盒',
+      );
+      expect(
+        tester.getRect(band).bottom,
+        closeTo(pill.bottom, 0.5),
+      );
+    });
+
     // ── 方案 B → TASK-11：KOS 分段 + launchers|windows 分割线（D-3）──
     // 图标区内部段序（DockIconRow 自绘槽位带）：leading(launcher/trash) →
     // pinned 段 → divider1 → 运行段——统一进同一 dockWaveLayout 波形带

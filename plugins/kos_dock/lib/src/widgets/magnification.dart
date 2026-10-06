@@ -222,3 +222,35 @@ class MagnificationPointer extends InheritedNotifier<ValueNotifier<double?>> {
   static MagnificationPointer? maybeOf(BuildContext context) => context
       .dependOnInheritedWidgetOfExactType<MagnificationPointer>();
 }
+
+/// 「放大路径激活中」布尔广播（quickshell `directMagnification =
+/// requested || progress > 0`，DockSurface.qml:104）。
+///
+/// 背景（TASK-12 复审缺陷4）：`_DockIconRowState._lastLocalX` 修复后，槽位
+/// `dockWaveLayout` 的 scale 分量在 220ms 退出塌回中平滑衰减；但图标内部
+/// `hasPointer = MagnificationPointer.of != null` 在 pointer 离开同帧即
+/// false → `hoverScale` 瞬时从 1.0（波形路径）回落到「无指针独立 hover
+/// 兜底 `1+0.2·hoverP`」（KOS DockIcon.qml:291-300）——hover ease 退完前
+/// 在 `iconSize·iconScale` 美术盒上叠 ~1.2× Transform.scale → 可见跳变。
+/// quickshell 语义是**包络未归零期间放大路径一直激活**，不只看 pointer 在
+/// 不在；故 `_DockIconRowState` 把「指针在容器 / 拖拽中 / amplitude>0」
+/// 的等价布尔经本 scope 下发，图标的 `hasPointer` 改判
+/// `MagnificationPointer.of(context) != null || WaveEnvelope.activeOf(context)`。
+///
+/// 无 scope（独立宿主/单测）→ `activeOf` 恒 false，`hasPointer` 语义退回
+/// 原式 `MagnificationPointer.of != null`。
+class WaveEnvelope extends InheritedNotifier<ValueNotifier<bool>> {
+  const WaveEnvelope({
+    required ValueNotifier<bool> active,
+    required super.child,
+    super.key,
+  }) : super(notifier: active);
+
+  /// 最近 [WaveEnvelope] 的包络激活布尔；无祖先 scope 时返回 false。
+  static bool activeOf(BuildContext context) =>
+      context
+              .dependOnInheritedWidgetOfExactType<WaveEnvelope>()
+              ?.notifier
+              ?.value ??
+          false;
+}

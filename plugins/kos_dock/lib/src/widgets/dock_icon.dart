@@ -454,8 +454,16 @@ class _DockIconState extends State<DockIcon>
                           // 有指针时视觉大小由 `iconScale` 直给、scale 分量归 1
                           // （不双重放大）；lift 仍随 `_hovering` 缓动——hover 的
                           // 负 y 反馈不被波形替代（bounce 测试的 lift 基线）。
+                          // TASK-12 复审缺陷4：「放大路径激活」对齐包络
+                          // （quickshell `directMagnification = requested ||
+                          // progress > 0`，DockSurface.qml:104）——行级
+                          // `WaveEnvelope` 在 amplitude>0 的 220ms 退出塌回期
+                          // 仍广播 true，hoverScale 继续走波形路径（=1.0）；
+                          // 无 scope 的独立宿主/单测退回原式（只看
+                          // MagnificationPointer 非 null）。
                           final hasPointer =
-                              MagnificationPointer.of(context) != null;
+                              MagnificationPointer.of(context) != null ||
+                                  WaveEnvelope.activeOf(context);
                           final hoverP = _hover.value;
                           final hoverScale = hasPointer
                               ? 1.0
