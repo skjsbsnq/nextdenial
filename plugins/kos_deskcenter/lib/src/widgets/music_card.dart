@@ -533,6 +533,8 @@ class _Cover extends StatelessWidget {
                 width: side,
                 height: side,
                 gaplessPlayback: true,
+                // MPRIS 封面原图远大于卡内缩略框：medium 双线性降采样。
+                filterQuality: FilterQuality.medium,
               ),
             ),
           );

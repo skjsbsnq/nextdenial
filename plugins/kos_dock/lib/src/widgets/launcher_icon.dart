@@ -370,6 +370,14 @@ class LauncherIcon extends StatelessWidget {
         'assets/applauncher.svg',
         package: 'kos_dock',
         fit: BoxFit.contain,
+        filterQuality: FilterQuality.medium,
+        // 1024² 原作常驻解码成 ~200px（42·dpr3.0·maxScale1.5·hover1.2）；
+        // 超出仍走 FilterQuality.medium 降采样，不近邻。
+        cacheWidth: (DockMetricsScope.of(context).iconSize *
+                MediaQuery.devicePixelRatioOf(context) *
+                kDockWaveMaxScale *
+                kDockHoverScale)
+            .ceil(),
         // 原色渲染：KOS 图标外观 color 模式直接绘制原图
         // （KOS: dock/DockIcon.qml:710-716 ——
         // `layer.enabled: IconAppearanceService.mode !== "color"`、

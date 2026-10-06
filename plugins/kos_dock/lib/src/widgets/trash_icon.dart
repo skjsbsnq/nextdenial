@@ -235,6 +235,15 @@ class _TrashIconState extends ConsumerState<TrashIcon>
                 : 'assets/icons/trash.png',
             package: 'kos_dock',
             fit: BoxFit.contain,
+            filterQuality: FilterQuality.medium,
+            // 256² 原图常驻解码成 ~200px（iconSize·dpr·maxScale·hover，
+            // 同 launcher_icon.dart Image.asset 的 cacheWidth 式）；超
+            // 出仍走 FilterQuality.medium 降采样，不近邻。
+            cacheWidth: (DockMetricsScope.of(context).iconSize *
+                    MediaQuery.devicePixelRatioOf(context) *
+                    kDockWaveMaxScale *
+                    kDockHoverScale)
+                .ceil(),
             // 解码/资产缺失时才退回 Material 字形（沿用旧实现的
             // full/empty 字形对）。
             errorBuilder: (context, error, stackTrace) => Icon(

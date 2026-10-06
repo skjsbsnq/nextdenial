@@ -377,6 +377,8 @@ class _PanelCover extends StatelessWidget {
               bytes!,
               fit: BoxFit.cover,
               gaplessPlayback: true,
+              // MPRIS 封面原图远大于面板缩略框：medium 双线性降采样。
+              filterQuality: FilterQuality.medium,
             )
           : LayoutBuilder(
               builder: (context, constraints) => Center(

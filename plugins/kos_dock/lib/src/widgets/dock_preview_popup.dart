@@ -825,7 +825,10 @@ class _DockPreviewPanel extends StatelessWidget {
                 Expanded(
                   child: SingleChildScrollView(
                     scrollDirection: Axis.horizontal,
-                    clipBehavior: Clip.hardEdge,
+                    // 单采样 FBO 下 hardEdge 不抗锯齿——预览卡是圆角
+                    // （kDockPreviewCardRadius），改用 antiAlias 让滚动裁剪
+                    // 边缘有覆盖率平滑。
+                    clipBehavior: Clip.antiAlias,
                     physics: const BouncingScrollPhysics(),
                     child: Row(
                       children: [

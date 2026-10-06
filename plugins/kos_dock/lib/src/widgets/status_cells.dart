@@ -847,6 +847,15 @@ class _DockControlCenterCellState extends State<DockControlCenterCell> {
                             width: kDockControlCenterIconSize,
                             height: kDockControlCenterIconSize,
                             fit: BoxFit.contain,
+                            filterQuality: FilterQuality.medium,
+                            // 72² 白描边原图→18px 工程图形：按物理像素
+                            // 预降采样 + medium 过滤，消边缘锯齿。乘满
+                            // AnimatedScale hover 峰值，与 launcher/trash
+                            // 的 cacheWidth 口径一致。
+                            cacheWidth: (kDockControlCenterIconSize *
+                                    kDockControlCenterCellHoverScale *
+                                    MediaQuery.devicePixelRatioOf(context))
+                                .ceil(),
                             color: colors.textPrimary,
                             colorBlendMode: BlendMode.srcIn,
                           ),

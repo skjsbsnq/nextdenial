@@ -699,7 +699,14 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
                 color: colors.tileOff,
                 child: switch (artBytes.value) {
                   final Uint8List bytes? when bytes.isNotEmpty =>
-                    Image.memory(bytes, fit: BoxFit.cover, gaplessPlayback: true),
+                    Image.memory(
+                      bytes,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                      // 媒体封面原图远大于 kDockControlCenterMediaArtSize
+                      // 缩略框：medium 双线性降采样消边缘锯齿。
+                      filterQuality: FilterQuality.medium,
+                    ),
                   _ => placeholder,
                 },
               ),
