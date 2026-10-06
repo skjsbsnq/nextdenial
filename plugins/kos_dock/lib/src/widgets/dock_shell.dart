@@ -26,11 +26,17 @@
 /// [divider3?][tray]`；launcher/trash 为内建件（TASK-04），受
 /// `dockPreferencesProvider` 的 `showLauncher`/`showTrash` 控制（KOS
 /// `ConfigService.showLauncher`/`showTrash`，DockContainer.qml:532,571），
+/// `DockIconRow`，内部按 KOS 分段（方案 B → TASK-11 起改自绘槽位）：
+/// leading(launcher/trash) + pinned 段 → divider1(launchers|windows，
+/// launcher/trash 为内建件（TASK-04），受
+/// `dockPreferencesProvider` 的 `showLauncher`/`showTrash` 控制（KOS
+/// `ConfigService.showLauncher`/`showTrash`，DockContainer.qml:532,571），
 /// false 即时从 Row/宽度推导中移除。「图标区」= `dock.pinned` 槽位里的
-/// `DockIconRow`，内部按 KOS 分段（方案 B）：pinned 段
-/// ReorderableListView → divider1(launchers|windows，仅两段都非空时
-/// 出现，DockContainer.qml:847-857 `visible:` :856) → 未 pin 运行段
-/// Row（windowsRepeater，:859-862）。pill 宽 = `metrics.dockWidth`
+/// `DockIconRow`，内部按 KOS 分段（TASK-11 起改自绘槽位，弃
+/// ReorderableListView）：leading(launcher/trash) → pinned 段 →
+/// divider1(launchers|windows，仅两段都非空时出现，
+/// DockContainer.qml:847-857 `visible:` :856) → 未 pin 运行段
+/// （windowsRepeater，:859-862）。pill 宽 = `metrics.dockWidth`
 /// （= `min(iconSize×scaleFactor + fixedOverhead, maxWidth)`，
 /// AdaptiveMath.mjs:148-149），由反解公式直接给出，不再走
 /// 「自然宽 vs 预算」的分支 clamp。
@@ -107,6 +113,14 @@ class KosDockShell extends ConsumerStatefulWidget {
 }
 
 class _KosDockShellState extends ConsumerState<KosDockShell> {
+  /// TASK-12 缺陷3：DockIconRow 每帧 postFrame 回报的当帧波形布局宽
+  /// （Σspan，见 `dock_icons.dart` `layoutWidth` 参数）。pill 本体宽/底层
+  /// 占位/带层 `dock.pinned` 宽都取 `max(静止反解宽, 本值)`——quickshell
+  /// `DockSurface.qml:119-120` `bandLength = min(availableLength,
+  /// max(96, layout.length))` 语义：pill 两端对称外扩跟随放大后的布局
+  /// 长，放大图标不再向 pill 外溢出遮 divider/info/tray。初值 0 → 上报
+  /// 前取静止宽（等价旧行为）。
+  final _iconRowLayoutWidth = ValueNotifier<double>(0);
   /// KOS `magnificationPointer`（DockContainer.qml:220-228）：整个 pill
   /// 的单一 hover 源把指针全局 x 发给所有图标；null = 指针离开容器
   /// （等价 KOS `Qt.point(-10000,-10000)` 哨兵）。
@@ -121,6 +135,12 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
   /// 广播 MouseRegion 的 RenderBox（localToGlobal 坐标映射用）。
   final _pointerRegionKey = GlobalKey();
 
+  /// TASK-12 图标带层（Stack 顶层，含 pill 顶缘上方的 headroom 溢出区）的
+  /// 广播 MouseRegion RenderBox——与玻璃层 `_pointerRegionKey` 共喂同一
+  /// `_pointerX`（两条 hover 源等价 KOS `magnificationPointer` 单源语义：
+  /// 玻璃层罩 pill 本体、带层罩 pill+headroom，谁在谁上由 hit test 决定）。
+  final _bandPointerRegionKey = GlobalKey();
+
   /// 指针 x 广播到与槽中心同系的全局坐标：MouseRegion 事件给的是局部
   /// 坐标，经自身 RenderBox.localToGlobal 映射（DockIcon/内建图标的槽
   /// 中心同为 localToGlobal 全局系）。
@@ -130,8 +150,16 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     _pointerX.value = box.localToGlobal(event.localPosition).dx;
   }
 
+  /// 图标带层同式（`_broadcastPointer` 的 RenderBox 换成带层 key）。
+  void _broadcastBandPointer(PointerHoverEvent event) {
+    final box = _bandPointerRegionKey.currentContext?.findRenderObject();
+    if (box is! RenderBox || !box.attached) return;
+    _pointerX.value = box.localToGlobal(event.localPosition).dx;
+  }
+
   @override
   void dispose() {
+    _iconRowLayoutWidth.dispose();
     _pointerX.dispose();
     super.dispose();
   }
@@ -362,146 +390,290 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     // 「自然宽 vs 预算」clamp 与滚动兜底。pill 底部内缩
     // `metrics.edgeMargin`（`max(4, round(dockHeight*0.12))`，随反解后
     // dockHeight 变化；KOS: dock/DockWindow.qml:63-64,177）。
-    return Align(
+    // TASK-12（quickshell DockItem.qml:112 / DockSurface.qml:120-121）：
+    // 放大图标底锚 pill 底向上「长」、可溢出 pill 顶缘（macOS 跳出水面）。
+    // - glass pill 本体保持 dockHeight 底对齐不变；
+    // - `ShellBackdropBlur` 的 ClipRRect 会裁掉溢出顶缘的内容，故给它包一层
+    //   OverflowBox：clip 边界向上扩 headroom（= 放大探出需求 + bounce/lift
+    //   余量，quickshell bandThickness 按 maxScale 预留带高的等价），blur/玻璃
+    //   仍只作用在 tight dockHeight 盒上——溢出部分只
+    //   是「不被裁」，backdrop-filter 的滤镜区不跟出去（quickshell 同构：
+    //   glass.y = parent.height − height 钉在带底，band 上半段无玻璃）；
+    // - 图标区（dock.pinned 槽位）单独提到 clip 之外的顶层层：底层玻璃盒内
+    //   留同宽占位（Row 自然宽不变），顶层 OverflowBox 向上放
+    //   DockIconRow——Row 的 crossAxisAlignment=center 按自身 maxChild 高
+    //   （dockHeight+headroom）给图标区分配高度，图标带在
+    //   dock_icons.dart 内底对齐，槽位盒贴带底。
+    //
+    // headroom 显式语义（quickshell `bandThickness = size·maxScale + 36` 的
+    // 本端等价）：美术盒底锚 pill 底，顶缘 = iconSlotSize·maxScale——超出
+    // pill 顶（dockHeight）的量 = iconSlotSize·maxScale − dockHeight。再加
+    // TASK-10 bounce 顶点（19px 向上平移，bounce 叠在放大基线上）与 hover
+    // lift（max(2, round(iconSize×0.08))≈4px）的余量，以及 2px 舍入保险，
+    // 保证「满幅放大 + bounce 顶点 + lift」极端组合也不被 ClipRRect 切顶。
+    // 底部 max(0,…) 兜底：dockHeight 足够大时 headroom 可为 bounce/lift 项。
+    final iconRowHeadroom = math.max(
+      0.0,
+      metrics.iconSlotSize * kDockWaveMaxScale -
+          metrics.dockHeight +
+          kDockLaunchBounceHeight +
+          kDockIconLiftHeadroomSlack,
+    );
+
+    // TASK-12 缺陷3（quickshell `DockSurface.qml:119-120` `bandLength =
+    // min(availableLength, max(96, layout.length))`）：pill 宽跟随**当帧**
+    // 波形布局宽 Σspan——图标带放大时 pill 两端对称外扩，放大图标始终留在
+    // pill 内（不再向左右溢出遮 divider/info/tray）。Σspan 由 DockIconRow
+    // 每帧 postFrame 回报到 `_iconRowLayoutWidth`；行重建/隐藏时本帧内用
+    // 静止反解宽兜底（`restingIconRowWidth` 与 `DockIconRow` 内 weights
+    // 构造逐项一致：leading+pinned+divider1(unscaled,dividerSlotWidth) +
+    // running，全槽 scale=1）。pill 宽 = 静止 dockWidth + Δmax(0, Σspan −
+    // resting)——外层 Align.bottomCenter 居中重排，外扩自然对称。
+    final restingIconRowWidth = _iconRowWidth(
+      metrics,
+      entryCount: entryCount +
+          (showLauncher ? 1 : 0) +
+          (showTrash ? 1 : 0),
+      divider1: DockMetrics.divider1Visible(
+        pinnedCount: pinnedCount,
+        runningCount: runningCount,
+      ),
+    );
+    return AnimatedBuilder(
+      animation: _iconRowLayoutWidth,
+      builder: (context, child) {
+        // Σspan 恒 ≥ resting（scale ≥ 1）；行首帧未上报（值 0）时退化为
+        // 静止宽。行消失/条目骤减后上报滞后一帧 → max 取法保证不欠宽
+        // （空行另经 `_reportLayoutWidth(0)` 主动清零，见 dock_icons.dart）。
+        final reportedIconRowWidth =
+            math.max(restingIconRowWidth, _iconRowLayoutWidth.value);
+        // TASK-12 复审缺陷2：占位宽/带层宽必须与 pillWidth 走**同一预算**
+        // ——底层 Row 的子项合计 = 占位宽 + 非图标区（divider2? + info? +
+        // divider3? + tray?），pillWidth 被 stripWidth 截断时占位宽不跟着
+        // 截会让 Row 溢出（debug 黄黑条 / release 右缘溢出），带层
+        // `SizedBox(width: iconRowWidth)` 在 centerLeft 下同向溢出。
+        // 非图标区宽 = Row 子项同式（divider 槽宽 `dividerSlotWidth`、info
+        // 槽 `infoSlotWidth + iconSize·kDockInfoCardGapRatio`、tray 槽
+        // `max(iconSlotSize, trayEstimateWidth)`——tray 在 fromWidth 的
+        // `trayRenderedOverflow` 回流与 DockTrayAccessory 内部缺省重算都
+        // 以「渲染宽」为准）。info 槽内 `ClipRect` + 页间 `pageX` 位移是
+        // 槽内行为，槽位几何不受放大影响。
+        final nonIconWidth =
+            (divider2 ? metrics.dividerSlotWidth : 0.0) +
+                (hasInfo
+                    ? metrics.infoSlotWidth +
+                        metrics.iconSize * kDockInfoCardGapRatio
+                    : 0.0) +
+                (divider3 ? metrics.dividerSlotWidth : 0.0) +
+                (hasTray
+                    ? math.max(metrics.iconSlotSize, trayEstimateWidth)
+                    : 0.0);
+        final iconRowWidth = math.min(
+          reportedIconRowWidth,
+          math.max(0.0, stripWidth - 2 * metrics.hPadding - nonIconWidth),
+        );
+        // pill 宽 = 内容宽（hpad×2 + 图标区 + 非图标区），自然封顶 stripWidth
+        // ——放大外扩语义不变（Σspan 超静止时两端对称外扩），只是带层/占位与
+        // pill 一起参与同一预算截断。
+        final pillWidth = math.min(
+          2 * metrics.hPadding + iconRowWidth + nonIconWidth,
+          stripWidth,
+        );
+        return Align(
       alignment: Alignment.bottomCenter,
       child: Padding(
         padding: EdgeInsets.only(bottom: metrics.edgeMargin),
-        child: ShellBackdropBlur(
-          blur: theme.backdropBlurEnabled,
-          // 前景不进 filter 层：glass 模式的 refraction/edge 光效不污染内容。
-          separateChild: true,
-          opacity: opacity,
-          borderRadius: borderRadius,
-          child: ShellInputRegion(
-            debugLabel: 'KOS Dock pill',
-            // 矩形输入区罩住整个 pill；KOS squircle 输入形状以更紧的非矩形
-            // 区近似为矩形（偏差记 docs/visual-deltas.md）。
-            child: SizedBox(
-              width: metrics.dockWidth,
-              height: metrics.dockHeight,
-              // DecoratedBox 画在 tight SizedBox 内侧——若用带 border 的
-              // Container，hairline 边宽会把内容区再内推 2px 造成 Row 溢出。
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  borderRadius: borderRadius,
-                  gradient: theme.panelGradient(
-                    accent.cardFillTop(theme),
-                    accent.cardFill(theme),
-                  ),
-                  // KOS: dock/DockDivider.qml:16 — divider 色走语义 hairline，
-                  // 不在此硬编码；hairline 边线给玻璃一个收敛边缘。
-                  border: Border.all(color: colors.hairlineSoft),
-                ),
-                child: MouseRegion(
-                  key: _pointerRegionKey,
-                  onHover: _broadcastPointer,
-                  onExit: (_) => _pointerX.value = null,
-                  child: MagnificationPointer(
-                    pointerX: _pointerX,
-                    child: DockMetricsScope(
-                      metrics: metrics,
-                      child: Padding(
-                        // hpad = round(iconSize*0.4)，随 iconSize 反解
-                        // （KOS: AdaptiveMath.mjs:12,143）。
-                        padding: EdgeInsets.symmetric(
-                          horizontal: metrics.hPadding,
+        child: OverflowBox(
+          // TASK-12：clip 边界向上放 headroom（放大图标可溢出 pill 顶缘），
+          // 自身仍是 tight dockWidth×dockHeight 的 pill 盒。
+          maxHeight: metrics.dockHeight + iconRowHeadroom,
+          alignment: Alignment.bottomCenter,
+          child: ShellBackdropBlur(
+            blur: theme.backdropBlurEnabled,
+            // 前景不进 filter 层：glass 模式的 refraction/edge 光效不污染内容。
+            separateChild: true,
+            opacity: opacity,
+            borderRadius: borderRadius,
+            child: MagnificationPointer(
+              pointerX: _pointerX,
+              child: DockMetricsScope(
+                metrics: metrics,
+                child: Stack(
+                  clipBehavior: Clip.none,
+                  children: [
+                // ── 底层：glass pill 本体（dockWidth×dockHeight，底对齐）──
+                ShellInputRegion(
+                  debugLabel: 'KOS Dock pill',
+                  // 矩形输入区罩住整个 pill；KOS squircle 输入形状以更紧的
+                  // 非矩形区近似为矩形（偏差记 docs/visual-deltas.md）。
+                  child: SizedBox(
+                    width: pillWidth,
+                    height: metrics.dockHeight,
+                    // DecoratedBox 画在 tight SizedBox 内侧——若用带 border
+                    // 的 Container，hairline 边宽会把内容区再内推 2px 造成
+                    // Row 溢出。
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        borderRadius: borderRadius,
+                        gradient: theme.panelGradient(
+                          accent.cardFillTop(theme),
+                          accent.cardFill(theme),
                         ),
-                        child: Row(
-                          crossAxisAlignment: CrossAxisAlignment.center,
-                          // 每个槽位固定 key（见上方注释）：槽位显隐变化时按
-                          // key 匹配 Element，避免后一位子树被重建（入场动画
-                          // 重播 / 状态丢失）。
-                          children: [
-                            // KOS: dock/DockContainer.qml:496-962 Row 顺序：
-                            // launcher → trash → pinned段 → divider1 → 运行段 →
-                            // divider2 → info → divider3 → trailingAccessory。
-                            // divider1(launchers|windows) 与运行段都在图标区
-                            // 内部（DockIconRow 的 rowChildren），此处只见
-                            // `dock.pinned` 一个图标区槽位。
-                            if (showLauncher)
-                              LauncherIcon(
-                                key: const ValueKey<String>('dock.launcher'),
-                                services: widget.services,
-                                coordinator: _popups,
-                              ),
-                            if (showTrash)
-                              TrashIcon(
-                                key: const ValueKey<String>('dock.trash'),
-                                services: widget.services,
-                                monitorId: widget.monitorId,
-                                coordinator: _popups,
-                              ),
-                            // 图标区槽位取反解后的自然宽（方案 C 起恒 ≤
-                            // 预算，不再 clamp/滚动）：n*(slot+spacing)−spacing
-                            // + （两段都非空时 +divider1 槽宽）——与
-                            // `DockMetrics.fromWidth` 的 iconUnits/divider
-                            // 计数同式；DockIconRow 内部 Center 撑满约束。
-                            SizedBox(
-                              key: const ValueKey<String>('dock.pinned'),
-                              width: _iconRowWidth(
-                                metrics,
-                                entryCount: entryCount,
-                                divider1: DockMetrics.divider1Visible(
-                                  pinnedCount: pinnedCount,
-                                  runningCount: runningCount,
+                        // KOS: dock/DockDivider.qml:16 — divider 色走语义
+                        // hairline，不在此硬编码；hairline 边线给玻璃一个收敛
+                        // 边缘。
+                        border: Border.all(color: colors.hairlineSoft),
+                      ),
+                      child: MouseRegion(
+                        key: _pointerRegionKey,
+                        onHover: _broadcastPointer,
+                        onExit: (_) => _pointerX.value = null,
+                        child: Padding(
+                          // hpad = round(iconSize*0.4)，随 iconSize 反解
+                          // （KOS: AdaptiveMath.mjs:12,143）。
+                          padding: EdgeInsets.symmetric(
+                            horizontal: metrics.hPadding,
+                          ),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: [
+                              // 图标区占位：真实 DockIconRow 在 Stack 顶层
+                              // （溢出 pill 顶缘不被 ClipRRect 裁）；占位保
+                              // Row 自然宽/槽位序不变，自身不吃 hit
+                              // （IgnorePointer——顶层图标带才是交互面）。
+                              IgnorePointer(
+                                child: SizedBox(
+                                  key: const ValueKey<String>(
+                                    'dock.pinned.placeholder',
+                                  ),
+                                  // TASK-12 缺陷3：占位宽 = 当帧图标区宽
+                                  // （max(静止, Σspan)）——pill 外扩时它把
+                                  // divider2/info/tray 同步右推。
+                                  width: iconRowWidth,
                                 ),
                               ),
-                              child: DockIconRow(
-                                monitorId: widget.monitorId,
-                                services: widget.services,
-                                coordinator: _popups,
-                              ),
-                            ),
-                            if (divider2)
-                              const DockDivider(
-                                key: ValueKey<String>('dock.divider.info'),
-                              ),
-                            if (hasInfo)
-                              KeyedSubtree(
-                                key: const ValueKey<String>('dock.infoCard'),
-                                child: infoCard,
-                              ),
-                            if (divider3)
-                              const DockDivider(
-                                key: ValueKey<String>('dock.divider.tray'),
-                              ),
-                            if (hasTray)
-                              // 托盘真实槽宽 = max(iconSlotSize, 估算内容宽)
-                              // （KOS `Loader.width = item.implicitWidth`
-                              // 参与 Row 自然宽等价，DockContainer.qml:
-                              // 954-959）；trayWidth 已回流进 dockWidth，
-                              // 内容右对齐排在槽内、不外延不遮相邻槽位。
-                              // DockTrayAccessory 缺省 trayWidth 时内部同式
-                              // 重算槽宽，与本槽同宽不漂移。
-                              SizedBox(
-                                key: const ValueKey<String>('dock.tray'),
-                                width: math.max(
-                                  metrics.iconSlotSize,
-                                  trayEstimateWidth,
+                              if (divider2)
+                                const DockDivider(
+                                  key: ValueKey<String>('dock.divider.info'),
                                 ),
-                                height: metrics.dockHeight,
-                                child: trayAccessory,
-                              ),
-                          ],
+                              if (hasInfo)
+                                KeyedSubtree(
+                                  key: const ValueKey<String>(
+                                    'dock.infoCard',
+                                  ),
+                                  child: infoCard,
+                                ),
+                              if (divider3)
+                                const DockDivider(
+                                  key: ValueKey<String>('dock.divider.tray'),
+                                ),
+                              if (hasTray)
+                                // 托盘真实槽宽 = max(iconSlotSize, 估算内容宽)
+                                // （KOS `Loader.width = item.implicitWidth`
+                                // 参与 Row 自然宽等价，DockContainer.qml:
+                                // 954-959）；trayWidth 已回流进 dockWidth，
+                                // 内容右对齐排在槽内、不外延不遮相邻槽位。
+                                // DockTrayAccessory 缺省 trayWidth 时内部同式
+                                // 重算槽宽，与本槽同宽不漂移。
+                                SizedBox(
+                                  key: const ValueKey<String>('dock.tray'),
+                                  width: math.max(
+                                    metrics.iconSlotSize,
+                                    trayEstimateWidth,
+                                  ),
+                                  height: metrics.dockHeight,
+                                  child: trayAccessory,
+                                ),
+                            ],
+                          ),
                         ),
                       ),
                     ),
                   ),
                 ),
-              ),
+                // ── 顶层：图标带（pill clip 之外的溢出通路）──
+                // KOS: dock/DockContainer.qml:496-962 Row 顺序：
+                // launcher → trash → pinned段 → divider1 → 运行段 ——
+                // launcher/trash 经 `DockIconRow.leading` 纳入同一
+                // `dockWaveLayout`（权重 1）。本层底对 pill 底、高度 =
+                // dockHeight + headroom（quickshell `DockSurface.qml:120-121`
+                // `bandThickness = size·maxScale + 36` 按最大倍率预留带高的
+                // 等价）：波形槽位底对带底，放大美术盒向上探出 pill 顶缘
+                // （ClipRRect 的 clip 边界已随外层 OverflowBox 上移
+                // headroom）。宽度与底层占位同式（反解自然宽，方案 C 起恒
+                // ≤ 预算），水平位置与底层 Row 同（同 hPadding 起排）。
+                // 自身 MouseRegion 罩住含 headroom 的整个带：pill 顶缘上方
+                // 的图标溢出区也吃 hover/exit（glass 层 MouseRegion 只罩
+                // pill 本体）。
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  height: metrics.dockHeight + iconRowHeadroom,
+                  child: MouseRegion(
+                    key: _bandPointerRegionKey,
+                    onHover: _broadcastBandPointer,
+                    onExit: (_) => _pointerX.value = null,
+                    child: Padding(
+                      padding: EdgeInsets.symmetric(
+                        horizontal: metrics.hPadding,
+                      ),
+                      child: Align(
+                        alignment: Alignment.centerLeft,
+                        child: SizedBox(
+                          key: const ValueKey<String>('dock.pinned'),
+                          // TASK-12 缺陷3：带层宽 = 当帧 Σspan（与占位同源）
+                          // ——图标带外扩始终留在 pill 内，不遮相邻槽位。
+                          width: iconRowWidth,
+                          child: DockIconRow(
+                            monitorId: widget.monitorId,
+                            services: widget.services,
+                            coordinator: _popups,
+                            layoutWidth: _iconRowLayoutWidth,
+                            leading: [
+                              if (showLauncher)
+                                LauncherIcon(
+                                  key: const ValueKey<String>(
+                                    'dock.launcher',
+                                  ),
+                                  services: widget.services,
+                                  coordinator: _popups,
+                                ),
+                              if (showTrash)
+                                TrashIcon(
+                                  key: const ValueKey<String>(
+                                    'dock.trash',
+                                  ),
+                                  services: widget.services,
+                                  monitorId: widget.monitorId,
+                                  coordinator: _popups,
+                                ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
+          ),
+        ),
       ),
+        );
+      },
     );
   }
 
   /// 图标区自然宽 = `n*(slot+spacing) − spacing` + divider1 槽位。
   ///
-  /// 与 `DockMetrics.fromWidth` 的 iconUnits/divider 计数同式（pinned 段 +
-  /// 运行段 + 段间 divider1，KOS DockContainer.qml:847-862）；反解后恒 ≤
-  /// dockWidth 扣掉固定槽位后的部分——方案 A/B 的「图标区预算 clamp +
-  /// 滚动兜底」随方案 C 移除。
+  /// [entryCount] 含 leading（launcher/trash）——TASK-11 起它们经
+  /// `DockIconRow.leading` 进同一 `dockWaveLayout` 波形带，槽宽同规格
+  /// iconSlotSize；divider1 仍以 `dividerSlotWidth` 占一个槽位（波形内
+  /// unscaled）。与 `DockMetrics.fromWidth` 的 iconUnits/divider 计数
+  /// 同式；反解后恒 ≤ dockWidth 扣掉固定槽位后的部分。
   static double _iconRowWidth(
     DockMetrics metrics, {
     required int entryCount,
@@ -510,5 +682,9 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
       ? 0.0
       : entryCount * (metrics.iconSlotSize + metrics.itemSpacing) -
             metrics.itemSpacing +
-            (divider1 ? metrics.dividerSlotWidth : 0.0);
+            // divider1 槽在 pinned|running 之间、`dockWaveLayout` 给它
+            // `span = dividerSlotWidth + itemSpacing`（非末槽仍带尾随
+            // gap）——本函数须与之同式，否则图标区定宽比真实行宽窄一个
+            // itemSpacing，running 末槽溢出图标区右缘。
+            (divider1 ? metrics.dividerSlotWidth + metrics.itemSpacing : 0.0);
 }

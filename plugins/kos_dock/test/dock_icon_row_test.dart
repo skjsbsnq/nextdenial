@@ -1,4 +1,5 @@
-// DockIconRow / DockIcon / magnification widget + 纯函数测试（TASK-01）。
+// DockIconRow / DockIcon / magnification widget + 纯函数测试（TASK-01;
+// TASK-11 起 magnification 换 quickshell 高斯波）。
 //
 // 假 ShellServices 全接口内存实现（ProviderListenable 用
 // `Provider((_)=>value)`），无真实 wayland/dbus/socket 依赖；
@@ -6,11 +7,13 @@
 //
 // 覆盖：pinned 渲染数、dot 数=min(3,windowCount)、点击
 // launch/activate/MRU 轮循、ReorderableListView 存在（方案 B：只含
-// pinned 键，运行段在其后的普通 Row）、magnification 纯函数边界
-// （d=0→scale 1.19/lift −0.04·iconSize；|d|≥radius→1.0/0；smoothstep
-// 中点单调对称）、固定槽位宽不随 pointer 变化、未 pin 条目「固定此应用」
-// 写回 pins。
+// pinned 键，运行段在其后的普通 Row）、dockWaveLayout 纯函数边界
+// （无指针→全 scale=1 等距；指针在 i 号槽中心→i 号 scale=maxScale、
+// 邻居 exp 衰减；amplitude 线性缩放峰值；pointer 越界/NaN→scale=1）、
+// 固定槽位宽不随 pointer 变化（无指针时）/连续变化（有指针时）、
+// 未 pin 条目「固定此应用」写回 pins。
 
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:denial_sdk/system.dart';
@@ -279,12 +282,17 @@ Widget _wrap(
 ) => ProviderScope(
   overrides: [dockPreferencesStoreProvider.overrideWithValue(store)],
   child: MaterialApp(
-    home: ShellTheme(
-      data: const ShellThemeData(),
-      child: SizedBox(
-        width: 800,
-        height: kDockBaseHeight,
-        child: DockIconRow(monitorId: 0, services: services),
+    home: MediaQuery(
+      // flutter_test 无障碍语义：disableAnimations=true → 振幅包络直写终
+      // 值（约束③兜底路径），波形「稳态」一帧即达。
+      data: const MediaQueryData(disableAnimations: true),
+      child: ShellTheme(
+        data: const ShellThemeData(),
+        child: SizedBox(
+          width: 800,
+          height: kDockBaseHeight,
+          child: DockIconRow(monitorId: 0, services: services),
+        ),
       ),
     ),
   ),
@@ -312,56 +320,148 @@ int _dotCount(WidgetTester tester) =>
         .length;
 
 // ── tests ──────────────────────────────────────────────────────────────
-
 void main() {
-  group('DockMagnification 纯函数', () {
-    const iconSize = kDockIconSize; // ≈42.857 → radius = max(85.7,140) = 140
-    final radius = DockMagnification.radius(iconSize);
+  group('dockWaveLayout 纯函数（TASK-11 高斯波）', () {
+    const size = 40.0;
+    const gap = 4.0;
+    const weights = [1.0, 1.0, 1.0];
 
-    test('radius = max(iconSize*2, 140)', () {
-      expect(radius, 140);
-      expect(DockMagnification.radius(100), 200); // iconSize*2 > 140
-    });
-
-    test('d=0 → influence 1、scale 1.19、lift −0.04·iconSize', () {
-      final influence = DockMagnification.influence(0, radius);
-      expect(influence, 1.0);
-      expect(DockMagnification.scale(influence), closeTo(1.19, 1e-9));
-      expect(
-        DockMagnification.lift(iconSize, influence),
-        closeTo(-iconSize * 0.04, 1e-9),
+    test('无指针 → 全 scale=1 等距', () {
+      final slots = dockWaveLayout(
+        weights: weights,
+        size: size,
+        gap: gap,
+        padding: 0,
+        pointerX: null,
+        maxScale: 1.5,
+        amplitude: 0,
       );
-    });
-
-    test('|d|≥radius → influence 0、scale 1.0、lift 0', () {
-      for (final d in [radius, radius + 1, 300.0]) {
-        final influence = DockMagnification.influence(d, radius);
-        expect(influence, 0.0);
-        expect(DockMagnification.scale(influence), 1.0);
-        expect(DockMagnification.lift(iconSize, influence), 0.0);
+      expect(slots, hasLength(3));
+      for (var i = 0; i < 3; i++) {
+        expect(slots[i].size, closeTo(size, 1e-9));
+        // 末槽 trailingGap=false → span=size（无尾随 gap）；其余 size+gap。
+        expect(
+          slots[i].span,
+          closeTo(i == 2 ? size : size + gap, 1e-9),
+        );
+        // center = 静止槽区中心（含尾随 gap）：(size+gap)·i + (size+gap)/2，
+        // 对齐 magnification.dart:147 `baseCursor + baseSpan/2`（baseSpan =
+        // size·weight+gap）。指针落此中心时该槽 scale 才达峰值 M。
+        expect(
+          slots[i].center,
+          closeTo((size + gap) * i + (size + gap) / 2, 1e-9),
+        );
       }
     });
 
-    test('smoothstep 对称且在 (0,radius) 单调递减', () {
-      var previous = 1.0;
-      for (var d = 1.0; d < radius; d += 5) {
-        final value = DockMagnification.influence(d, radius);
-        expect(value, lessThan(previous));
-        expect(value, greaterThan(0));
-        previous = value;
-        // 对称：f(d) == f(−d)
-        expect(value, DockMagnification.influence(-d, radius));
-      }
-      // 中点 smoothstep(0.5)=0.5
-      expect(
-        DockMagnification.influence(radius / 2, radius),
-        closeTo(0.5, 1e-9),
+    test('指针在 1 号槽中心 → 1 号 scale=maxScale、邻居 exp 衰减', () {
+      final slots = dockWaveLayout(
+        weights: weights,
+        size: size,
+        gap: gap,
+        padding: 0,
+        pointerX: (size + gap) * 1 + (size + gap) / 2, // 1 号槽中心
+        maxScale: 1.5,
+        amplitude: 1,
       );
+      expect(slots[1].size, closeTo(size * 1.5, 1e-9));
+      expect(slots[0].size, lessThan(slots[1].size));
+      expect(slots[2].size, lessThan(slots[1].size));
+      expect(slots[0].size, closeTo(slots[2].size, 1e-6)); // 对称
+    });
+
+    test('amplitude 线性缩放峰值', () {
+      final slots = dockWaveLayout(
+        weights: weights,
+        size: size,
+        gap: gap,
+        padding: 0,
+        pointerX: (size + gap) / 2, // 0 号槽中心 → d=0 → scale 满幅
+        maxScale: 1.5,
+        amplitude: 0.5,
+      );
+      expect(slots[0].size, closeTo(size * (1 + 0.5 * 0.5), 1e-9));
+    });
+
+    test('pointer 越界/NaN → scale=1', () {
+      for (final x in [null, double.nan, -9999.0, double.infinity]) {
+        final slots = dockWaveLayout(
+          weights: weights,
+          size: size,
+          gap: gap,
+          padding: 0,
+          pointerX: x,
+          maxScale: 1.5,
+          amplitude: 1,
+        );
+        for (final s in slots) {
+          expect(s.size, closeTo(size, 1e-9), reason: 'pointerX=$x');
+        }
+      }
+    });
+
+    test('unscaled 槽位 scale=1（divider 不缩放）', () {
+      final slots = dockWaveLayout(
+        weights: weights,
+        size: size,
+        gap: gap,
+        padding: 0,
+        pointerX: size / 2,
+        maxScale: 1.5,
+        amplitude: 1,
+        unscaled: {0},
+      );
+      expect(slots[0].size, closeTo(size, 1e-9));
+      expect(slots[1].size, greaterThan(size)); // 邻居仍被推
+    });
+
+    test('span 总和 = Σspan（连续推开）', () {
+      final slots = dockWaveLayout(
+        weights: weights,
+        size: size,
+        gap: gap,
+        padding: 0,
+        pointerX: size / 2,
+        maxScale: 1.5,
+        amplitude: 1,
+      );
+      final total = slots.fold(0.0, (s, slot) => s + slot.span);
+      expect(total, closeTo(slots.last.start + slots.last.span, 1e-9));
+    });
+
+    test('dockWaveInsertionIndex：x < 中线 → 槽位下标', () {
+      final slots = dockWaveLayout(
+        weights: weights,
+        size: size,
+        gap: gap,
+        padding: 0,
+        pointerX: null,
+        maxScale: 1.5,
+        amplitude: 0,
+      );
+      expect(dockWaveInsertionIndex(slots, 0), 0);
+      expect(dockWaveInsertionIndex(slots, size + gap + 1), 1);
+      expect(dockWaveInsertionIndex(slots, 9999), 3);
+    });
+
+    test('dockWavePreviewOrder：移除后插入', () {
+      expect(dockWavePreviewOrder(3, 0, 0), [0, 1, 2]); // 原地
+      expect(dockWavePreviewOrder(3, 0, 1), [0, 1, 2]); // 原地（gap=source+1）
+      expect(dockWavePreviewOrder(3, 0, 2), [1, 0, 2]); // 移到 1 号位
+      expect(dockWavePreviewOrder(3, 0, 3), [1, 2, 0]); // 移到尾
+    });
+
+    test('dockWaveDropTarget：移除前 gap → 移除后目标', () {
+      expect(dockWaveDropTarget(0, 0), 0);
+      expect(dockWaveDropTarget(0, 1), 0);
+      expect(dockWaveDropTarget(0, 2), 1);
+      expect(dockWaveDropTarget(2, 0), 0);
+      expect(dockWaveDropTarget(2, 3), 2);
     });
   });
 
   group('DockIconRow', () {
-    testWidgets('渲染 pinned 图标 + ReorderableListView', (tester) async {
+    testWidgets('渲染 pinned 图标（自绘槽位布局，无 ReorderableListView）', (tester) async {
       final services = _FakeShellServices()..apps = _apps;
       final store = _MemoryDockPreferencesStore(
         DockPreferences(pinned: [_pin(_apps[0]), _pin(_apps[1])]),
@@ -369,7 +469,8 @@ void main() {
       await tester.pumpWidget(_wrap(services, store));
       await _settle(tester);
       expect(find.byType(DockIcon), findsNWidgets(2));
-      expect(find.byType(ReorderableListView), findsOneWidget);
+      // TASK-11：ReorderableListView 已移除，槽位由 Stack+Positioned 自绘。
+      expect(find.byType(ReorderableListView), findsNothing);
     });
 
     testWidgets('空 pinned → 不渲染图标（pill 仍由 dock_view 画）', (tester) async {
@@ -497,7 +598,7 @@ void main() {
       expect(services.activated, [1]);
     });
 
-    testWidgets('槽位宽固定：pointerX 变化不改 itemExtent/槽宽，缩放只发生在槽内 Transform',
+    testWidgets('槽位宽随指针连续变化（TASK-11 高斯波）：无指针固定/有指针推开邻居',
         (tester) async {
       final services = _FakeShellServices()..apps = _apps;
       final store = _MemoryDockPreferencesStore(
@@ -507,47 +608,178 @@ void main() {
       await _settle(tester);
       final icons = find.byType(DockIcon);
       expect(icons, findsNWidgets(2));
-      final slot = tester.getSize(icons.first);
       // 独立宿主（无 KosDockShell）→ DockMetricsScope.fallback 基准几何。
       final fb = DockMetricsScope.fallback;
-      expect(slot.width, closeTo(fb.iconSlotSize, 0.01));
-      // 注入前相邻两 slot 中心的距离。
-      double centerDistance() => (tester.getCenter(icons.at(0)) -
-              tester.getCenter(icons.at(1)))
-          .distance;
-      final spacingBefore = centerDistance();
-
-      // 指针移到第 0 个图标中心：槽宽/间距不变（视觉缩放只在槽内 Transform）。
-      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
-      await gesture.addPointer(location: Offset.zero);
-      final targetCenter = tester.getCenter(icons.at(0));
-      await gesture.moveTo(targetCenter);
-      await tester.pump();
+      // 无指针时槽宽 = iconSlotSize（静止布局，约束④）。
       expect(
         tester.getSize(icons.first).width,
         closeTo(fb.iconSlotSize, 0.01),
       );
-      // 相邻 slot 中心距与注入前完全一致（槽宽/间距不受 pointer 影响）。
-      expect(centerDistance(), closeTo(spacingBefore, 0.001));
+      double centerDistance() => (tester.getCenter(icons.at(0)) -
+              tester.getCenter(icons.at(1)))
+          .distance;
+      final spacingBefore = centerDistance();
+      // TASK-11 槽距语义：gap 烘在每槽 span 尾部；TASK-12 起槽位列经
+      // OverflowBox(bottomCenter) 底锚摆放，相邻槽**视觉中心距** =
+      // span_i = slotSize + gap（被测两槽为非末槽/末槽组合，实测几何下
+      // 中心距等于首槽 span）。旧「Center 居中 → slotSize + gap/2」的
+      // 公式随底锚改版不再适用。
       expect(
         spacingBefore,
         closeTo(fb.iconSlotSize + fb.itemSpacing, 0.01),
       );
 
-      // 指针正下方图标的 Transform：scale>1 或 lift≠0（视觉缩放确实发生）。
-      // 弹簧需要若干帧才离开静止值，逐帧推进直到 progress 显现。
-      var scaled = false;
-      for (var i = 0; i < 30 && !scaled; i++) {
-        await tester.pump(const Duration(milliseconds: 16));
-        for (final transform in tester.widgetList<Transform>(
-          find.descendant(of: icons.at(0), matching: find.byType(Transform)),
-        )) {
-          final scale = transform.transform.getMaxScaleOnAxis();
-          final lift = transform.transform.storage[13]; // Matrix4 y 平移
-          if (scale > 1.0 || lift != 0.0) scaled = true;
-        }
+      // 指针移到第 0 个图标中心：槽宽连续变化（被推开的邻居间距增大）。
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      final targetCenter = tester.getCenter(icons.at(0));
+      await gesture.moveTo(targetCenter);
+      // 指针 x 经帧后回调喂振幅包络（disableAnimations 直写终值 1），
+      // 需第二帧 build 才把 amplitude=1 落到槽位 scale。
+      await tester.pump();
+      await tester.pump();
+      // 槽宽本身随 scale 变（TASK-11 核心）：被指图标槽位 span 增大。
+      expect(
+        tester.getSize(icons.first).width,
+        greaterThan(fb.iconSlotSize + 1),
+        reason: '指针在 0 号槽中心时该槽位 span 应连续增大（推开邻居）',
+      );
+      // 相邻槽中心距随指针连续变化（不再是固定 iconSlotSize+spacing）。
+      expect(
+        centerDistance(),
+        greaterThan(spacingBefore + 0.5),
+        reason: '指针滑过时相邻槽位被连续推开，中心距应变大',
+      );
+
+      await gesture.moveTo(Offset.zero);
+      await tester.pump();
+
+    });
+
+    testWidgets('TASK-12 底部锚定抬起：放大图标底锚带底、顶缘上移', (tester) async {
+      final services = _FakeShellServices()..apps = _apps;
+      final store = _MemoryDockPreferencesStore(
+        DockPreferences(pinned: [_pin(_apps[0]), _pin(_apps[1])]),
+      );
+      await tester.pumpWidget(_wrap(services, store));
+      await _settle(tester);
+      final icons = find.byType(DockIcon);
+      expect(icons, findsNWidgets(2));
+      final fb = DockMetricsScope.fallback;
+      // 无指针（静止）：槽位列高 = iconSlotSize，rect 底缘 = 带底。
+      final resting = tester.getRect(icons.at(0));
+      expect(resting.height, closeTo(fb.iconSlotSize, 0.01));
+      final restingBottom = resting.bottom;
+      final restingTop = resting.top;
+
+      // 指针移到 0 号图标中心 → 波形放大该槽（dy/dsize = −1：底不动顶上移）。
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      await gesture.moveTo(tester.getCenter(icons.at(0)));
+      await tester.pump();
+      await tester.pump();
+
+      final magnified = tester.getRect(icons.at(0));
+      expect(
+        magnified.height,
+        greaterThan(fb.iconSlotSize + 1),
+        reason: '指针在槽中心 → 槽位列高随 scale 增大',
+      );
+      // 底部锚定：放大后底缘不离开带底（不是槽内上下对称长）。
+      expect(
+        magnified.bottom,
+        closeTo(restingBottom, 0.5),
+        reason: 'macOS lift：美术盒底锚带底，放大只向上生长',
+      );
+      // 顶缘上移 = 放大增量全部向上（抬起量 = Δsize，dy/dsize = −1）。
+      expect(
+        restingTop - magnified.top,
+        closeTo(magnified.height - resting.height, 0.5),
+        reason: '抬起是纯几何 dy/dsize=−1：顶缘上移量 = 高度增量',
+      );
+      // 放大后顶缘高于静止顶缘（向上「抬」出原槽顶）。
+      expect(magnified.top, lessThan(restingTop));
+
+      await gesture.moveTo(Offset.zero);
+      await tester.pump();
+    });
+
+    testWidgets('TASK-12 缺陷1/2：美术盒 = iconSize·scale、底边距 pill 底恒定',
+        (tester) async {
+      final services = _FakeShellServices()..apps = _apps;
+      final store = _MemoryDockPreferencesStore(
+        DockPreferences(pinned: [_pin(_apps[0]), _pin(_apps[1])]),
+      );
+      await tester.pumpWidget(_wrap(services, store));
+      await _settle(tester);
+      final icons = find.byType(DockIcon);
+      expect(icons, findsNWidgets(2));
+      final fb = DockMetricsScope.fallback;
+      // 美术盒 = ExcludeSemantics 下 iconSize·iconScale 的 SizedBox。
+      Finder artwork(Finder icon) {
+        final ex = find.descendant(
+          of: icon,
+          matching: find.byType(ExcludeSemantics),
+        );
+        return find.descendant(
+          of: ex,
+          matching: find.byWidgetPredicate(
+            (w) =>
+                w is SizedBox &&
+                w.width != null &&
+                w.width!.isFinite &&
+                w.width == w.height,
+          ),
+        );
       }
-      expect(scaled, isTrue, reason: '指针正下方图标应产生 scale>1 或 lift≠0');
+
+      // 静止：美术盒边长 = iconSize（缺陷1 回归：旧式把 weight≈1.2 折进
+      // 美术盒，静止画 iconSlotSize≈50.4 而非 iconSize≈42）。
+      final resting = tester.getRect(artwork(icons.at(0)));
+      expect(
+        resting.width,
+        closeTo(fb.iconSize, 0.01),
+        reason: '静止美术盒边长应为 iconSize（不折 weight）',
+      );
+      // 缺陷2：美术盒底边距带底（=pill 底）恒定 margin = (dockHeight−iconSize)/2。
+      final band = find.byKey(const Key('dock.pinned'));
+      // 独立宿主无 'dock.pinned' 键——用图标带底缘 = DockIconRow 底部。
+      final bandBottom = band.evaluate().isNotEmpty
+          ? tester.getRect(band).bottom
+          : tester.getRect(find.byType(DockIconRow)).bottom;
+      final margin = (fb.dockHeight - fb.iconSize) / 2;
+      expect(
+        bandBottom - resting.bottom,
+        closeTo(margin, 0.5),
+        reason: '静止美术盒底边距带底 = (dockHeight−iconSize)/2',
+      );
+
+      // 放大：美术盒 = iconSize·scale（scale>1），底边 margin 不变。
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      await gesture.moveTo(tester.getCenter(icons.at(0)));
+      await tester.pump();
+      await tester.pump();
+      final slotRect = tester.getRect(icons.at(0));
+      final scale = slotRect.height / fb.iconSlotSize;
+      expect(scale, greaterThan(1.05));
+      final mag = tester.getRect(artwork(icons.at(0)));
+      expect(
+        mag.width,
+        closeTo(fb.iconSize * scale, 0.5),
+        reason: '放大美术盒 = iconSize·scale（非 slotSize·scale）',
+      );
+      // 放大态下指针在槽上 → TASK-10 hover lift 叠加 −max(2,round(iconSize×0.08))
+      // 位移（bounce 链路原样保留的 hover 负 y 反馈）；底边 margin 在其上恒定。
+      final hoverLift = math.max(
+        2.0,
+        (fb.iconSize * kDockHoverLiftRatio).roundToDouble(),
+      );
+      expect(
+        bandBottom - mag.bottom,
+        closeTo(margin + hoverLift, 0.5),
+        reason: '放大后美术盒底边 margin 恒定（+ hover lift 位移，向上长）',
+      );
 
       await gesture.moveTo(Offset.zero);
       await tester.pump();
@@ -616,7 +848,7 @@ void main() {
       expect(_dotCount(tester), 2);
     });
 
-    testWidgets('未 pin 条目不可拖拽重排（无 ReorderableDragStartListener）', (tester) async {
+    testWidgets('未 pin 条目不可拖拽重排（仅 pinned 槽位可发起拖拽）', (tester) async {
       final services = _FakeShellServices()
         ..apps = _apps
         ..windowsList = [_window(5, 'kitty')];
@@ -627,20 +859,31 @@ void main() {
       await _settle(tester);
       final icons = find.byType(DockIcon);
       expect(icons, findsNWidgets(2));
+      // TASK-11：ReorderableListView 已移除，拖拽重排手写——只有 pinned
+      // 槽位可发起拖拽（Listener 收 PointerDown → `_dragStart` 记源槽；
+      // running/leading 槽位按下直接 return，无 `_dragStart`）。
+      // 验证方式：运行段图标长按后无拖拽预览（`_dragPreview` 不置位），
+      // pinned 图标长按后出现拖拽浮层（OverlayPortal 有子树）。
+      // 简化断言：运行段图标长按不触发 `_dragPreview`（无浮层），
+      // pinned 图标长按后 `_dragProxy` 有内容（Opacity 占位 + 浮层）。
+      final runningIcon = tester.widget<DockIcon>(icons.at(1));
+      expect(runningIcon.isPinnedEntry, isFalse);
+      // 运行段图标无拖拽源（`_dragStart` 不记）——长按后无预览。
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: tester.getCenter(icons.at(1)));
+      await tester.pump(const Duration(milliseconds: 200));
+      // 未 pin 条目按下不进入 reorder 态：`_dragPreview` 不置位 → 无
+      // Opacity(0.35) 半透明占位（拖拽源槽位的占位视觉；`_dragProxy` 是常驻
+      // OverlayPortal，不能直接查 OverlayPortal 存在性——popup 协调器/
+      // 预览也用 OverlayPortal，恒有实例）。
       expect(
-        find.ancestor(
-          of: icons.at(0),
-          matching: find.byType(ReorderableDragStartListener),
-        ),
-        findsOneWidget,
-      );
-      expect(
-        find.ancestor(
-          of: icons.at(1),
-          matching: find.byType(ReorderableDragStartListener),
+        find.byWidgetPredicate(
+          (w) => w is Opacity && w.opacity == 0.35,
         ),
         findsNothing,
+        reason: '未 pin 运行条目不可拖拽（无 _dragStart → 无预览占位）',
       );
+      await gesture.removePointer();
     });
 
     testWidgets('未 pin 图标点击 → activateWindow（1 窗）/ MRU 轮循（多窗）',

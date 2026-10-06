@@ -135,23 +135,49 @@ const double kDockActiveRadiusRatio = 0.30;
 /// tonal→≤0.34）,138（`showActiveBackground: isRunning && isActivated`）。
 const double kDockActiveBackgroundAlpha = 0.22;
 
-/// Magnification 影响半径下限（px）：radius = max(iconSize×2, 140)。
+/// TASK-11 高斯波峰值 scale `M`（quickshell `clamp(magnification,1,2)`，
+/// 默认 1.5）。
 ///
-/// KOS: common/AppearanceTokens.qml:444 — `magnificationRadius: 140`；
-/// dock/DockIcon.qml:271-272 `Math.max(iconSize*2.0, magnificationRadius)`。
-const double kDockMagnificationRadius = 140;
+/// quickshell: `Common/functions/DockLayout.js:24` — `maximum =
+/// max(1, min(2, magnification))` + DockService.magnificationScale 默认 1.5；
+/// KOS 旧 smoothstep 峰值 1.19（AppearanceTokens.qml:445）与影响半径
+/// 140/lift 0.04 随固定槽位路径整段移除（docs/visual-deltas.md TASK-11）。
+const double kDockWaveMaxScale = 1.5;
 
-/// Magnification 峰值缩放：scale = 1 + influence×(1.19−1)。
+/// TASK-12 抬起净空的**余量项**（不是比例）：headroom = `iconSlotSize ×
+/// kDockWaveMaxScale − dockHeight + kDockLaunchBounceHeight + 本值`。
 ///
-/// KOS: common/AppearanceTokens.qml:445 — `magnificationMaxScale: 1.19`；
-/// dock/DockIcon.qml:280-282。
-const double kDockMagnificationMaxScale = 1.19;
+/// 美术盒底锚 pill 底、顶缘 = `iconSlotSize·maxScale`——超出 pill 顶
+/// （`dockHeight`）的几何需求是 `iconSlotSize·maxScale − dockHeight`；
+/// `kDockLaunchBounceHeight`（19px）盖住 bounce 顶点向上平移；本值再叠加
+/// hover lift（`max(2, round(iconSize×kDockHoverLiftRatio))`≈4px）+ ~2px
+/// 舍入保险 → `6`。
+///
+/// quickshell `Modules/Dock/DockSurface.qml:120-121`：`bandThickness =
+/// size·maxScale + 36`，玻璃托盘高之外按最大倍率预留整段带高——放大图标
+/// 底锚向上「长」出玻璃面（macOS「跳出水面」）。本端 pill 本体保持
+/// `dockHeight` 底对齐不变，本值只给 `ShellBackdropBlur` 的 ClipRRect 与
+/// 波形槽位向上 overflow 的余量（`dock_shell.dart` OverflowBox +
+/// `dock_icons.dart` 槽位 OverflowBox）。
+const double kDockIconLiftHeadroomSlack = 6.0;
 
-/// Magnification 抬升比：liftY = −iconSize×0.04×influence（亚像素，不取整）。
+/// 波形振幅包络时长（指针进/出容器的唯一缓动）：220ms `easeOutCubic`。
 ///
-/// KOS: common/AppearanceTokens.qml:446 — `magnificationLiftRatio: 0.04`；
-/// dock/DockIcon.qml:285-288。
-const double kDockMagnificationLiftRatio = 0.04;
+/// quickshell: `Common/functions/DockMotion.js:6` `reflowDuration = 220`
+/// + `DockSurface.qml:96-101` `Behavior on magnificationProgress`
+/// （NumberAnimation 220ms OutCubic）。
+const Duration kDockWaveAmplitudeDuration = Duration(milliseconds: 220);
+
+/// 指针离开容器的防抖（ms）：region 抖动期内不立即把包络打到 0。
+///
+/// quickshell: `DockSurface.qml:637-644` `magnificationExit` Timer
+/// `interval: 80`。
+const Duration kDockWaveExitDebounce = Duration(milliseconds: 80);
+
+/// 手写重排的拖拽启动阈值（px 水平位移）：长按下超过阈值即进 reorder 态
+/// （对齐 ReorderableListView 长按拖拽手势与 quickshell `DockItem.qml`
+/// MouseArea 拖拽语义）。
+const double kDockReorderDragThreshold = 10;
 
 /// 独立 hover 缩放（magnification 指针缺席时）：scale 1.20。
 ///
@@ -214,6 +240,44 @@ const Duration kDockEntranceStagger = Duration(milliseconds: 60);
 /// KOS: dock/DockContainer.qml:855（`lineRadius: 999`）；DockDivider.qml:13
 /// 默认 `dividerWidth / 2`，DockContainer 各实例均覆盖为 999。
 const double kDockDividerCapRadius = 999;
+
+// ── TASK-10/11 图标弹跳反馈与波形 ────────────────────────────────────────
+//
+// TASK-10 的 `kDockHoverSpring`（Motion.bouncy hover 过冲弹簧）已随 TASK-11
+// 移除：高斯波下各槽 scale 由 `dockWaveLayout` 每帧直算，不再经逐图标
+// spring 跟手（硬性约束①：唯一缓动是振幅包络）。
+
+/// 无容器指针时的独立 hover 进度缓动（指针缺席的兜底路径，
+/// `_progress` bounded tween）：quickshell `DockItem.qml` 无指针 hover 的
+/// iconSize Behavior 100ms OutCubic，本端对齐同一量级。
+const Duration kDockHoverEaseDuration = Duration(milliseconds: 100);
+
+/// 点击启动单次弹跳（launch bounce）峰值位移（px）：图标向上跳起
+/// 19px 后落地回弹。
+///
+/// quickshell: `Modules/Dock/DockItem.qml:86-104` — `SequentialAnimation`
+/// `bounce: 0 → 19`（DockItem.qml:89-96 `to: 19`），水平 dock 下
+/// `artwork.y = … − root.bounce`（:112 上推）。曲线构成参考 KOS
+/// `dock/DockIcon.qml:320-338` `attentionPulse`（trash 收文件的
+/// scale/lift/glow 脉冲），但 KOS 普通图标点击启动无任何弹跳 → 本效果为
+/// **新增**，参数取 quickshell。取固定像素而非 iconSize 比例：quickshell
+/// 的 19px 同样是常量（不随其 iconSize 缩放），且对小 iconSize（18px 下限
+/// 时 0.4×iconSize=7.2px）保持同一视觉强度、避免亚像素舍入分叉。
+const double kDockLaunchBounceHeight = 19;
+
+/// launch bounce 上升段时长：`bounce 0 → 19`，220ms。
+///
+/// quickshell: `DockItem.qml:89-96` — `duration: 220`，
+/// `easing.type: Easing.OutQuad`（→ `Curves.easeOutQuad`）。
+const Duration kDockLaunchBounceRiseDuration = Duration(milliseconds: 220);
+
+/// launch bounce 落地段时长：`bounce → 0`，340ms 回弹。
+///
+/// quickshell: `DockItem.qml:97-102` — `duration: 340`，
+/// `easing.type: Easing.OutBounce`（→ `Curves.bounceOut`，等价 Qt
+/// `Easing.OutBounce`）；KOS `attentionPulse` 的回落段同用 OutBounce
+/// （dock/DockIcon.qml:335）。总时长 ≈560ms，单次 forward 不循环。
+const Duration kDockLaunchBounceFallDuration = Duration(milliseconds: 340);
 
 // ══════════════════════════════════════════════════════════════════
 // 二、DockMetrics：KOS AdaptiveMath.computeLayout 的运行时移植
@@ -531,15 +595,23 @@ final class DockMetrics {
     // （上方 :141-145 同式取整）——取整方向上界使渲染宽最多比估计宽出 ~1px
     // （800 宽 2 pinned 实测溢出 0.62px → RenderFlex overflow 硬失败）。
     // 按真实几何取 max 再 clamp 到 maxWidth（KOS 同处差异 <1px，记
-    // docs/visual-deltas.md）。渲染宽 = 2*hpad + 全 app 图标槽 + pinned/
-    // running 段内间距 + divider 槽 + info 槽 + tray 真实宽超出 1 icon
-    // unit 的部分（outer Row 槽位间无 itemSpacing——间距只烘进
-    // pinned/running 条目之间与 divider margin）。
+    // docs/visual-deltas.md）。渲染宽 = 2*hpad + 全 app 图标槽 + 图标区
+    // 全槽位间距 + divider 槽 + info 槽 + tray 真实宽超出 1 icon unit
+    // 的部分。TASK-11：间距烘进波形带**每槽尾随 gap**（含 launcher/
+    // trash/divider1/running 同一 dockWaveLayout），即「图标区槽数−1」
+    // 个 gap——不再是旧 Row 的 (pinned−1)+(running−1) 段内间距（tray/
+    // info 在 outer Row 槽位、无 itemSpacing）。
+    final iconRowSlots = pinnedCount +
+        runningCount +
+        (showLauncher ? 1 : 0) +
+        (showTrash ? 1 : 0) +
+        (divider1Visible(pinnedCount: pinnedCount, runningCount: runningCount)
+            ? 1
+            : 0);
     final renderedWidth =
         hPadding * 2 +
         appIconCount * (iconSize + activeBackgroundGap * 2) +
-        (math.max(0, pinnedCount - 1) + math.max(0, runningCount - 1)) *
-            itemSpacing +
+        math.max(0, iconRowSlots - 1) * itemSpacing +
         dividerCount * (kDockDividerWidth + dividerMargin * 2) +
         effInfoUnits * iconSize +
         trayRenderedOverflow;

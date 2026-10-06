@@ -32,8 +32,13 @@
 
 ## TASK-01 图标行新增偏差
 
-- **无 launch bounce**：KOS 启动应用时图标弹跳动画（DockIcon.qml 的
-  launch 弹跳分支）未移植；点击 launch 仅触发 `launchApplication`。
+- **~~无 launch bounce~~（TASK-10 已实现，本条作废/更正）**：原记录称
+  「KOS 启动应用时图标弹跳动画未移植」——**更正**：KOS 基准本身没有
+  点击启动弹跳（KOS 唯一的弹跳原语是 trash 收文件的 `attentionPulse`，
+  DockIcon.qml:320-338，经 DockContainer.qml:608 `onDepositReceived`
+  触发）。TASK-10 按 quickshell `DockItem.qml:86-104` 新增了 launch
+  bounce（19px/220ms OutQuad → 340ms OutBounce，单次），见文末
+  「TASK-10」节。
 - **无 urgent 红点**：KOS `demandsAttention` 红角标（DockIcon.qml:736-764
   attentionBadge）因 wire 协议缺口砍掉；运行态只有 dot。
 - **多窗点击 = MRU 轮循**：KOS 多窗点击弹逐窗口预览列表；移植版按
@@ -52,9 +57,12 @@
   CONSTRAINTS §3 映射为 `context.shellTheme.accent` @ 0.22（subtle）。
 - **hover 高亮 = textPrimary @ 0.12**：KOS 白 0.12（DockIcon.qml:647）；
   SDK 无 hover token，用 `shellColors.textPrimary` 同 alpha 代替。
-- **spring 映射 Motion.snappy**：KOS iconSpring s8.0/d0.40/m0.60
-  （DockAnimation.qml:37-50）实测 t90≈96ms/settle≈160ms；选 SDK
-  弹簧族中同量级「小元素快跟手」标定的 Motion.snappy。
+- **spring 映射 ~~Motion.snappy~~ → `kDockHoverSpring`（TASK-10 更正）**：
+  KOS iconSpring s8.0/d0.40/m0.60（DockAnimation.qml:37-50）实测
+  t90≈96ms/settle≈160ms/0.1% 过冲。TASK-10 为 hover「跳起过冲」把
+  `_springTo` 的 `spring:` 从 `Motion.snappy`（超临界、零过冲）换成
+  `kDockHoverSpring` = `Motion.bouncy`（m1.0/k460/c34，次临界 ζ≈0.79 →
+  ~1.5% 行程过冲）——见文末「TASK-10」节。
 - **单 progress 驱动 scale+lift**：KOS hover 与 magnification 各走独立
   分支；移植版合为一条 [0,∞) 弹簧进度（峰值常量按模式取
   1.19/1.20），模式切换瞬间有微小峰值不连续（~1%）。
@@ -871,3 +879,111 @@ TASK-09 节补：
   给 Wrap，等价 KOS 列主序交错；单行（rows=1）天然序即可。格本体不
   带左 padding（KOS iconSpacing 属网格列距、不属格内几何）。
   `dockTrayEstimateWidth` 的 `itemCount` 计全部格（KOS `allKeys` 同式）。
+
+## TASK-10 · 图标弹跳反馈（hover 过冲 + launch bounce）
+
+两项均为**新增效果**——KOS 与 quickshell 基准对比结论（任务卡背景核实）：
+KOS 唯一的弹跳原语是 trash 收文件的 `attentionPulse`（`DockIcon.qml:
+320-338`，经 `DockContainer.qml:608` `onDepositReceived` 触发），**普通
+图标点击启动无任何弹跳**，hover 只有 spring 平滑放大（d0.40 → 0.1% 过冲
+不可测）；quickshell `DockItem.qml:86-104` 有 `launchAnimation` 但无
+hover 过冲。因此本节两个动画相对 KOS 基准是**有意新增**（参数取
+quickshell 的「单次弹跳」风格，曲线构成参考 KOS `attentionPulse`）。
+
+- **点击启动单次弹跳（launch bounce）**：`DockIcon._activate()` 的
+  `windows.isEmpty` launch 分支触发一次——`bounce 0→19px`（220ms
+  `Curves.easeOutQuad` 上升）→ `0`（340ms `Curves.bounceOut` 落地），
+  总时长 ≈560ms、单次 forward 不循环（quickshell `DockItem.qml:86-104`
+  `SequentialAnimation`：`to: 19`/`duration: 220`/`Easing.OutQuad` +
+  `to: 0`/`duration: 340`/`Easing.OutBounce`，`onStopped: bounce = 0`）。
+  位移叠加进槽内 `Transform.translate` 的 y（quickshell 同语义：
+  `artwork.y = … − root.bounce`，DockItem.qml:112）——只在槽内
+  Transform 上动，不改槽位/pill 任何布局尺寸。activate/多窗轮循分支
+  **不**弹跳（quickshell 只对 `kind==="app"` 的 `launching` 触发）。
+  峰值取固定 19px 而非 `iconSize` 比例：quickshell 的 19px 同样是常量
+  （不随其 iconSize 缩放），且对小 iconSize 保持同一视觉强度。
+- **launcher/trash 同样弹跳**：`DockControlIcon` 的 `onTap` 经内部
+  `_onTapBounce` 包装统一触发同一条 bounce 曲线（其 `onTap` 是外部传入
+  callback，故 launcher `toggleLauncher` 与 trash `open` 的调用点零改动）。
+  偏离说明：quickshell 只对 `kind==="app"` 弹跳，内建控件不弹——本端把
+  launcher/trash 纳入是**超出基准的增强**（任务卡验收 2 要求；记档）。
+- **hover 跳起过冲（首选方案落地）**：`DockIcon._springTo` 与
+  `DockControlIcon._springTo` 的 `spring:` 由 `Motion.snappy`（m1.0/
+  k520/c44，超临界零过冲）换成 `kDockHoverSpring` = `Motion.bouncy`
+  （m1.0/k460/c34 → ζ≈0.79 次临界，过冲 ≈e^(−πζ/√(1−ζ²))≈1.5% 行程）。
+  选首选而非独立 `_hop` controller 的理由：①次临界弹簧在数学上**必然**
+  过冲（单测断言 ζ<1 与过冲率 >1%），可见性有保证；②不引入第二个
+  controller/`Listenable.merge` 之外的动画源，disableAnimations 兜底
+  路径（`_springTo` 直写终值）零改动；③过冲同时作用在 scale 与 lift
+  两条由 `_progress` 驱动的映射上（放大瞬间「多跳一点再回落」），无需
+  额外 y 分量即达「跳起」观感。稳态终值不变：`_scaleFor`/`_liftFor` 的
+  映射与 `kDockMagnificationMaxScale`(1.19)/`kDockHoverScale`(1.20)/
+  lift 峰值常量均未改，过冲只发生在收敛途中。
+- **disableAnimations 兜底**：`MediaQuery.disableAnimationsOf` 为 true
+  时 `_bounce` 不 `forward`（直写 `_bounce.value = 0`，沿用 `_springTo`
+  的「直写终值」兜底语义——否则活动 ticker 在 flutter_test 里永不推进、
+  拖挂收尾，dock_icons.dart `_DockEntrance` 注释原警示）。
+- **新增 token**（`dock_tokens.dart` TASK-10 段）：`kDockHoverSpring`、
+  `kDockLaunchBounceHeight=19`、`kDockLaunchBounceRiseDuration=220ms`、
+  `kDockLaunchBounceFallDuration=340ms`，注释逐项标注 quickshell
+  `DockItem.qml:86-104` / KOS `DockIcon.qml:320-338` /
+  `DockAnimation.qml:42-44` 行号。
+
+## TASK-11 · hover 布局级高斯波 magnification（重构 KOS 固定槽位 → quickshell 波形）
+
+**相对 KOS 是偏离、对齐 quickshell/macOS**：magnification 由 KOS
+smoothstep 固定槽位（`AppearanceTokens.qml:441-446` influence 圆衰减 +
+固定 iconSlotSize 槽内 `Transform.scale`，峰值 `kDockMagnificationMaxScale`
+=1.19）重构为 quickshell `Common/functions/DockLayout.js:18-58` 的高斯波
+可变槽宽模型。视觉差异：被指图标放大到 ~1.5×（旧 1.19），**相邻图标被
+连续推开**（槽宽 `span=size·scale+gap` 随高斯 scale 变，旧实现槽宽固定、
+图标只在槽内缩放——没有 macOS 式「推开邻居」的波浪感）；拖尾 ~±3 槽的
+高斯衰减比 KOS smoothstep 圆衰减更柔。
+
+- **纯函数 `dockWaveLayout`**（`magnification.dart`）：`DockLayout.js
+  layout()` 移植。`scale_i = 1 + A·(M−1)·exp(−d²/2)`，`d=(pointerX−
+  center_i)/(size+gap)`（σ=1）；`center` 一律用**未缩放**静止坐标累加
+  （DockLayout.js:16-17 明令动画坐标绝不回喂）；`span=size·weight·scale
+  +gap`。weight 表达槽宽（应用图标/launcher/trash = `iconSlotSize/
+  iconSize`）；divider1 是 `unscaled` 槽位（scale 恒 1 但占槽宽）。无
+  指针/NaN/amplitude=0 → 全槽 scale=1 → 静止布局（与 pill 反解自然宽
+  同源）。
+- **弃 ReorderableListView → 自绘槽位**（`dock_icons.dart`）：固定
+  itemExtent 模型无法表达变宽槽位。改为 `Stack`+`Positioned` 按每帧
+  `dockWaveLayout` 的 `{start,span,size}` 摆放；key 绑条目使预览换位
+  时元素跟随不重建。拖拽重排手写（quickshell `DockItem.qml` MouseArea
+  + `insertionIndex`/`previewOrder`/`DockSurface.qml:414-433,513-540`）：
+  行级 `Listener` 收 PointerDown（落 pinned 槽位记 `_dragStart`，
+  `!_saving` 才可发起）、水平位移超 `kDockReorderDragThreshold`（10px）
+  进 reorder 态、`dockWaveInsertionIndex` 在**未缩放**槽位中线求插入位
+  （6px 跨中线迟滞消抖，DockSurface.qml:425-432）、`dockWavePreviewOrder`
+  预览置换、松手 `dockWaveDropTarget`→`_reorder`→`DockOrder`→`_savePins`
+  持久化；被拖源槽 `Opacity(0.35)` 残影 + `OverlayPortal` 跟随浮层。拖出
+  pill（|dy|>dockHeight）只取消不 unpin。命中判定用静止布局的**中线**，
+  不再是整槽矩形——指针落在槽右半会命中下一槽（quickshell `insertionAt`
+  同语义，记档偏差）。
+- **唯一缓动 = 振幅包络**：`_amplitude` AnimationController 220ms
+  `easeOutCubic` 进/出（quickshell `magnificationProgress`，
+  DockSurface.qml:91-110），离开加 80ms 防抖 Timer（`magnificationExit`
+  :637-644）；指针 x 与各槽 scale 每帧直算，**无任何逐图标 spring**
+  （`kDockHoverSpring` 已删；TASK-10 的 hover 过冲 spring 路径整段移除）。
+- **图标直绑槽位**：`DockIcon`/`DockControlIcon` 新增 `slotSize`/
+  `iconScale` 参数——布局尺寸 = `size·weight·scale`、美术边长 =
+  `iconSize·iconScale`（底部锚定向上生长，macOS 的 lift 由「放大+底锚」
+  自然产生，不再是独立 lift 位移）。无容器指针时保留独立 hover 回退
+  （`_hover` 0/1 bounded tween → scale 1.20 + lift，KOS
+  `DockIcon.qml:291-300`）。
+- **launcher/trash 纳入波形**：经 `DockIconRow.leading` 进同一
+  `dockWaveLayout`（quickshell 把内建件当普通槽位）；`_WaveSlotAdapter`
+  把槽位几何注入 `LauncherIcon`/`TrashIcon` 的同名参数。信息卡/托盘区
+  不进波形带（在 pill 外层 Row，非图标元素不跳）。
+- **pill 宽**：`_iconRowWidth` 的 `entryCount` 现含 leading（launcher/
+  trash 移入波形带后外层不再单独占槽）；波形只在有指针时撑开行内容宽，
+  `SizedBox(key:'dock.pinned')` 外壳宽仍是静止自然宽（wave 超出部分经
+  `Stack(clipBehavior: Clip.none)` 溢出显示，与 quickshell
+  「reserved 空间不变、波形撑出」同语义）。
+- **新增 token**（`dock_tokens.dart`）：`kDockWaveMaxScale`=1.5、
+  `kDockWaveAmplitudeDuration`=220ms、`kDockWaveExitDebounce`=80ms、
+  `kDockReorderDragThreshold`=10、`kDockHoverEaseDuration`=100ms；删除
+  `kDockHoverSpring`/`kDockMagnificationMaxScale` 等旧 magnification
+  常量。

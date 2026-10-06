@@ -26,6 +26,7 @@ import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/system_services.dart'
     show bluetoothServiceProvider, networkServiceProvider;
 import 'package:denial_sdk/system.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
@@ -615,6 +616,197 @@ void main() {
       expect(width4 - width1, closeTo(m4.dockWidth - m1.dockWidth, 1.0));
     });
 
+    testWidgets('TASK-12 缺陷3：指针放大图标时 pill 宽随当帧 Σspan 对称外扩',
+        (tester) async {
+      final services = _FakeShellServices()..apps = _apps;
+      final store = _MemoryDockPreferencesStore(
+        DockPreferences(pinned: [_pin(_apps[0]), _pin(_apps[1])]),
+      );
+      await tester.pumpWidget(_wrap(services, store));
+      await _settle(tester);
+
+      final band = find.byKey(const Key('dock.pinned'));
+      final pillRest = tester.getRect(_pill());
+      final bandRest = tester.getRect(band);
+
+      // 指针移到首槽中心（带内局部坐标 = 静止槽中心；pill 外扩是居中重排，
+      // 带内局部 x 与 Σspan 无关，瞄局部坐标钉住高斯峰）。
+      final icon = find.byType(DockIcon).first;
+      final localCenter =
+          tester.getCenter(icon).dx - bandRest.left;
+      final gesture = await tester.createGesture(kind: PointerDeviceKind.mouse);
+      await gesture.addPointer(location: Offset.zero);
+      addTearDown(gesture.removePointer);
+
+      // 反复「等带宽收敛 → 按新带左缘重瞄局部中心」：pill 每扩一次带左缘
+      // 左移，全局指针要跟着重钉到同一局部 x（≤4 轮，每轮 220ms 包络）。
+      var lastGlobal = double.nan;
+      for (var round = 0; round < 4; round++) {
+        final globalX = tester.getRect(band).left + localCenter;
+        if ((globalX - lastGlobal).abs() < 0.01) break;
+        lastGlobal = globalX;
+        await gesture.moveTo(Offset(globalX, tester.getCenter(icon).dy));
+        // 等带盒宽（=max(静止,Σspan)）收敛：连续 8 帧差 <1e-4。
+        var prev = double.nan;
+        var stable = 0;
+        for (var i = 0; i < 200; i++) {
+          await tester.pump(const Duration(milliseconds: 16));
+          final w = tester.getSize(band).width;
+          if (!prev.isNaN && (w - prev).abs() < 1e-4) {
+            stable++;
+            if (stable >= 8 && i >= 12) break;
+          } else {
+            stable = 0;
+          }
+          prev = w;
+        }
+      }
+
+      final pillMag = tester.getRect(_pill());
+      final bandMag = tester.getRect(band);
+
+      // pill 宽随放大增长（缺陷3 回归：不再恒为静止 dockWidth）。
+      expect(
+        pillMag.width,
+        greaterThan(pillRest.width + 1),
+        reason: '图标带放大 → pill 宽跟随当帧 Σspan 外扩',
+      );
+      // 带层宽 = 当帧 Σspan ≥ 静止宽。
+      expect(bandMag.width, greaterThan(bandRest.width + 1));
+      // 对称外扩：pill 中心保持在条带中心（800/2=400），左右各扩 Δ/2。
+      expect(
+        pillMag.center.dx,
+        closeTo(400, 0.5),
+        reason: 'pill 对称外扩 → 中心不变（Align.bottomCenter 居中重排）',
+      );
+      // 左缘左移量 ≈ 右缘右移量 = Δ/2（±1px 帧末残差）。
+      final dW = pillMag.width - pillRest.width;
+      expect(
+        pillRest.left - pillMag.left,
+        closeTo(dW / 2, 1.0),
+        reason: '左缘左移 Δ/2',
+      );
+      expect(
+        pillMag.right - pillRest.right,
+        closeTo(dW / 2, 1.0),
+        reason: '右缘右移 Δ/2',
+      );
+      // 放大槽位仍留在 pill 内（不遮 divider/info/tray）：带右缘 ≤ pill 内容
+      // 右缘（pill 右缘 − hPadding）。hPadding = round(iconSize*0.4)。
+      final metrics = DockMetrics.fromWidth(800, pinnedCount: 2);
+      expect(
+        bandMag.right,
+        lessThanOrEqualTo(pillMag.right - metrics.hPadding + 1.0),
+        reason: '图标带右缘不越出 pill 内容区（不遮 divider/info/tray）',
+      );
+
+      await gesture.moveTo(const Offset(-4000, 0));
+      await tester.pump();
+    });
+
+    testWidgets('TASK-12 复审缺陷1：空行后 pill 宽退回静止反解宽（不再停在旧 Σspan）',
+        (tester) async {
+      final services = _FakeShellServices()..apps = _apps;
+      final pinnedStore = _MemoryDockPreferencesStore(
+        DockPreferences(pinned: [_pin(_apps[0]), _pin(_apps[1])]),
+      );
+      await tester.pumpWidget(_wrap(services, pinnedStore));
+      await _settle(tester);
+      final pillPinned = tester.getSize(_pill()).width;
+      expect(pillPinned, greaterThan(0));
+
+      // 切到「pinned 清空 + launcher/trash 隐藏 + 无运行窗口」→
+      // DockIconRow totalCount==0 → AnimatedBuilder 连同 postFrame 上报整棵
+      // 卸载。缺陷1 回归：`_iconRowLayoutWidth` 必须被清零（空行分支主动
+      // 上报 0），否则 shell `iconRowWidth = max(resting, reported)` 停在旧
+      // 大值 → pill 保持放大宽不回退。
+      final emptyStore = _MemoryDockPreferencesStore(
+        const DockPreferences(showLauncher: false, showTrash: false),
+      );
+      await tester.pumpWidget(_wrap(services, emptyStore));
+      await _settle(tester);
+
+      final pillEmpty = tester.getSize(_pill()).width;
+      // restingIconRowWidth=0 时 pill 宽 = 2*hPadding（空行、无 info/tray/
+      // divider 的非图标区宽为 0）；用同输入反解的期望宽断言。
+      final expected = DockMetrics.fromWidth(
+        800,
+        pinnedCount: 0,
+        runningCount: 0,
+        showLauncher: false,
+        showTrash: false,
+      );
+      expect(
+        pillEmpty,
+        closeTo(2 * expected.hPadding, 1.0),
+        reason: '空行 → pill 宽退回 2·hPadding（reported Σspan 清零）',
+      );
+      expect(
+        pillEmpty,
+        lessThan(pillPinned),
+        reason: '空行后 pill 宽必须小于有条目时（缺陷1：不再停在旧 Σspan）',
+      );
+    });
+
+    testWidgets('TASK-12 复审缺陷3：激活底斑/hover 高亮是 iconSlotSize/iconSize'
+        '方块（不被拉满 dockHeight）', (tester) async {
+      final services = _FakeShellServices()
+        ..apps = _apps
+        ..windowsList = [
+          ApplicationWindow(
+            id: 1,
+            appId: 'kate',
+            title: 'kate',
+            active: true,
+            minimized: false,
+          ),
+        ];
+      final store = _MemoryDockPreferencesStore(
+        DockPreferences(pinned: [_pin(_apps[0])]),
+      );
+      await tester.pumpWidget(_wrap(services, store));
+      await _settle(tester);
+
+      final metrics = DockMetrics.fromWidth(800, pinnedCount: 1);
+      // 缺陷3 回归：激活底斑的外层 SizedBox 必须是 iconSlotSize² 方块
+      // （底对 pill 区），不是被 tight dockHeight 高拉成的长条。用
+      // 「SizedBox 边长」断言（accent 0.22 alpha 后色值不再是字面量，
+      // 不比 decoration 色）。
+      final icon = find.byType(DockIcon).first;
+      final squareBadge = find.descendant(
+        of: icon,
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is SizedBox &&
+              w.width == metrics.iconSlotSize &&
+              w.height == metrics.iconSlotSize,
+        ),
+      );
+      expect(
+        squareBadge,
+        findsWidgets,
+        reason: '激活底斑必须是 iconSlotSize² 方块（复审缺陷3：不拉满 dockHeight）',
+      );
+      // 反证：DockIcon 内不应有「宽 = iconSlotSize 且高 = dockHeight」的
+      // 拉满长条 SizedBox（旧 tight-height 缺陷形态；iconSlotSize 与
+      // dockHeight 不同值时才构成反证）。
+      final stretched = find.descendant(
+        of: icon,
+        matching: find.byWidgetPredicate(
+          (w) =>
+              w is SizedBox &&
+              w.width == metrics.iconSlotSize &&
+              w.height == metrics.dockHeight &&
+              metrics.iconSlotSize != metrics.dockHeight,
+        ),
+      );
+      expect(
+        stretched,
+        findsNothing,
+        reason: '底斑不可被拉成 dockHeight 高的长条',
+      );
+    });
+
     testWidgets('divider2(windows|info) = infoCard 且 entryCount>0（launcher/trash 不计入）',
         (tester) async {
       final services = _FakeShellServices()..apps = _apps;
@@ -748,10 +940,15 @@ void main() {
       );
     });
 
-    // ── 方案 B：KOS 分段 + launchers|windows 分割线（D-3）──
-    // 图标区内部段序（DockIconRow 的 rowChildren）：pinned 段
-    // ReorderableListView → divider1 → 运行段 Row；divider2/3 在外层
-    // Row（KOS DockContainer.qml:847-857 :856, 859-862, 907-913 :912, :951）。
+    // ── 方案 B → TASK-11：KOS 分段 + launchers|windows 分割线（D-3）──
+    // 图标区内部段序（DockIconRow 自绘槽位带）：leading(launcher/trash) →
+    // pinned 段 → divider1 → 运行段——统一进同一 dockWaveLayout 波形带
+    // （ReorderableListView 已弃：槽宽随高斯 scale 连续变，固定 itemExtent
+    // 表达不了）；divider2/3 在外层 Row
+    // （KOS DockContainer.qml:847-857 :856, 859-862, 907-913 :912, :951）。
+    // 「pinned 段 < divider1 < 运行段」的断言改用 DockIcon.isPinnedEntry
+    // 谓词区分两段（旧 dock.row.pinned/dock.row.running 容器 key 已随
+    // 固定槽位段容器一起移除）。
 
     testWidgets('pins + 运行条目 → 图标区内段序 [pinned][divider1][running]，'
         '外层 [running…][divider2][info][divider3][tray]', (tester) async {
@@ -788,16 +985,64 @@ void main() {
             '（launchers|windows、windows|info、info|tray）',
       );
 
-      final pinnedBox =
-          tester.getRect(find.byKey(const Key('dock.row.pinned')));
-      final runningBox =
-          tester.getRect(find.byKey(const Key('dock.row.running')));
-      final d1 = tester.getCenter(find.byType(DockDivider).at(0));
-      final d2 = tester.getCenter(find.byType(DockDivider).at(1));
-      final d3 = tester.getCenter(find.byType(DockDivider).at(2));
+      // TASK-11：自绘槽位带不再给 pinned/运行段容器挂 key——用
+      // DockIcon.isPinnedEntry 谓词区分两段几何（pinned=true → pinned 槽位，
+      // pinned=false → 未 pin 运行槽位），旧 dock.row.* key 已移除。
+      Finder pinnedIcons() => find.byWidgetPredicate(
+        (w) => w is DockIcon && w.isPinnedEntry,
+      );
+      Finder runningIcons() => find.byWidgetPredicate(
+        (w) => w is DockIcon && !w.isPinnedEntry,
+      );
+      expect(pinnedIcons(), findsNWidgets(2));
+      expect(runningIcons(), findsOneWidget);
+      // pinned 段右缘 = 最后一条 pinned 槽位的实测右缘；运行段左缘 =
+      // 第一条 running 槽位的实测左缘。
+      final pinnedRight = tester
+          .getRect(pinnedIcons().last)
+          .right;
+      final pinnedLeft = tester.getRect(pinnedIcons().first).left;
+      final runningBox = tester.getRect(runningIcons().first);
+      // TASK-12：divider1 在图标带层（DockIconRow 波形带内），divider2/3 在
+      // 玻璃层 Row——两者分属 Stack 不同层，find 顺序不再等同于视觉左→右。
+      // 故 divider1 经「DockIconRow 后代」限定、外层两条经 at(0)/at(1) 取。
+      final d1 = tester.getCenter(
+        find.descendant(
+          of: find.byType(DockIconRow),
+          matching: find.byType(DockDivider),
+        ),
+      );
+      // 外层两条（divider2/3）：取「非 DockIconRow 后代」的 DockDivider，
+      // 按中心 x 左→右排序取前两条。
+      final outerRects = find
+          .byType(DockDivider)
+          .evaluate()
+          .where(
+            (e) => find
+                .descendant(
+                  of: find.byType(DockIconRow),
+                  matching: find.byWidgetPredicate(
+                    (d) => identical(d, e.widget),
+                  ),
+                )
+                .evaluate()
+                .isEmpty,
+          )
+          .map((e) => tester.getCenter(find.byWidget(e.widget)))
+          .toList()
+        ..sort((a, b) => a.dx.compareTo(b.dx));
+      final d2 = outerRects[0];
+      final d3 = outerRects[1];
       // 图标区内部：pinned 段 < divider1 < 运行段。
-      expect(pinnedBox.right, lessThanOrEqualTo(d1.dx));
-      expect(runningBox.left, greaterThanOrEqualTo(d1.dx));
+      // TASK-11 高斯波槽位：pinned 末槽 widget 右缘与 divider1 槽中心的间距
+      // 只剩亚像素（槽位 span 含尾随 gap、icon 视觉边长/槽位/rounding 共同
+      // 决定实测 rect），故容差放宽到 0.5px——语义「pinned 段在 divider1
+      // 左侧」不变。
+      // TASK-12 底锚槽位列（OverflowBox）下 icon 左缘可再外溢 ~1px，
+      // 容差放宽到 1.5px——语义「运行段在 divider1 右侧」不变（仍以
+      // 槽中心几何判定，非亚像素级紧贴）。
+      expect(pinnedRight, lessThanOrEqualTo(d1.dx + 0.5));
+      expect(runningBox.left, greaterThanOrEqualTo(d1.dx - 1.5));
       // 外层：运行段 < divider2 < info < divider3 < tray。
       expect(d2.dx, greaterThan(runningBox.right - 0.01));
       expect(
@@ -813,23 +1058,17 @@ void main() {
         greaterThan(d3.dx),
       );
 
-      // pinned 段 = ReorderableListView（可重排）；运行段在其外。
-      final listBox =
-          tester.getRect(find.byType(ReorderableListView));
-      expect(listBox.left, closeTo(pinnedBox.left, 0.01));
-      expect(listBox.right, closeTo(pinnedBox.right, 0.01));
-      // 运行段 DockIcon 不在 ReorderableDragStartListener 内。
-      final runningIcon = find.descendant(
-        of: find.byKey(const Key('dock.row.running')),
-        matching: find.byType(DockIcon),
-      );
-      expect(runningIcon, findsOneWidget);
+      // TASK-11：ReorderableListView/ReorderableDragStartListener 已移除——
+      // 拖拽重排是行级 Listener + dockWaveInsertionIndex 手写；运行段不可
+      // 拖拽由「hit-test 只认 pinned 槽位」保证（无框架拖拽 listener 可查，
+      // 语义断言在 dock_icon_row_test 的「未 pin 条目不可拖拽」用例）。
+      expect(find.byType(ReorderableListView), findsNothing);
+      expect(find.byType(ReorderableDragStartListener), findsNothing);
+      // launcher/trash 与 pinned 段在同一连续波形带内（leading 槽位在
+      // pinned 槽位左侧）。
       expect(
-        find.ancestor(
-          of: runningIcon,
-          matching: find.byType(ReorderableDragStartListener),
-        ),
-        findsNothing,
+        tester.getCenter(find.byType(LauncherIcon)).dx,
+        lessThan(pinnedLeft),
       );
     });
 
@@ -858,8 +1097,18 @@ void main() {
       await _settle(tester);
       // 仅 divider2(windows|info)：running>0 → hasInfo&&windowCount>0。
       expect(find.byType(DockDivider), findsOneWidget);
-      expect(find.byKey(const Key('dock.row.pinned')), findsNothing);
-      expect(find.byKey(const Key('dock.row.running')), findsOneWidget);
+      // TASK-11：旧 dock.row.pinned/dock.row.running 容器 key 随固定槽位段
+      // 容器移除——段存在性改用 DockIcon.isPinnedEntry 谓词判定。
+      bool hasPinned() => find
+          .byWidgetPredicate((w) => w is DockIcon && w.isPinnedEntry)
+          .evaluate()
+          .isNotEmpty;
+      bool hasRunning() => find
+          .byWidgetPredicate((w) => w is DockIcon && !w.isPinnedEntry)
+          .evaluate()
+          .isNotEmpty;
+      expect(hasPinned(), isFalse);
+      expect(hasRunning(), isTrue);
 
       // 只有 pinned（无运行窗口）：divider1 不出现；图标区里只有 pinned 段。
       final pinnedOnly = _FakeShellServices()..apps = _apps;
@@ -875,8 +1124,8 @@ void main() {
       );
       await _settle(tester);
       expect(find.byType(DockDivider), findsOneWidget);
-      expect(find.byKey(const Key('dock.row.pinned')), findsOneWidget);
-      expect(find.byKey(const Key('dock.row.running')), findsNothing);
+      expect(hasPinned(), isTrue);
+      expect(hasRunning(), isFalse);
 
       // 两段都非空 → divider1 + divider2 = 2 条。
       final both = _FakeShellServices()
@@ -899,8 +1148,8 @@ void main() {
       );
       await _settle(tester);
       expect(find.byType(DockDivider), findsNWidgets(2));
-      expect(find.byKey(const Key('dock.row.pinned')), findsOneWidget);
-      expect(find.byKey(const Key('dock.row.running')), findsOneWidget);
+      expect(hasPinned(), isTrue);
+      expect(hasRunning(), isTrue);
     });
 
     // TASK-04b 方案 C（KOS iconSize 反解，AdaptiveMath.mjs:129-150）验收：
@@ -987,18 +1236,17 @@ void main() {
             findsNWidgets(11 + running),
             reason: '方案 C：所有 pinned+running 图标都渲染，无裁剪兜底',
           );
-          // 图标行不可滚：ReorderableListView 钉 NeverScrollable →
-          // maxScrollExtent 恒 0（方案 A/B 的「条目超宽时段内自滚」已移除）。
-          final scrollableState = tester.state<ScrollableState>(
+          // TASK-11：ReorderableListView 已移除 → 图标行不再含 Scrollable；
+          // 方案 C 反解保证内容 ≤ maxWidth，自绘槽位带恒为静止自然宽
+          // （无指针 → amplitude=0 → 全槽 scale=1）。以「无 Scrollable」+
+          // pill 宽上限为不变量，替代旧 maxScrollExtent==0 断言。
+          expect(
             find.descendant(
-              of: find.byType(ReorderableListView),
+              of: find.byType(DockIconRow),
               matching: find.byType(Scrollable),
             ),
-          );
-          expect(
-            scrollableState.position.maxScrollExtent,
-            closeTo(0, 0.5),
-            reason: '方案 C：iconSize 反解保证内容 ≤ maxWidth，图标行不可滚',
+            findsNothing,
+            reason: '方案 C+TASK-11：图标行自绘槽位不可滚（无 Scrollable）',
           );
           // pill 宽 ≤ 条带×0.98（maxWidth 上限，AdaptiveMath.mjs:30,148-149）。
           expect(

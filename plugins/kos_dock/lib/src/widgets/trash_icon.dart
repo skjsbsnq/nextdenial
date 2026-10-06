@@ -41,6 +41,8 @@ class TrashIcon extends ConsumerStatefulWidget {
     required this.services,
     required this.monitorId,
     this.coordinator,
+    this.slotSize,
+    this.iconScale = 1.0,
     super.key,
   });
 
@@ -52,6 +54,11 @@ class TrashIcon extends ConsumerStatefulWidget {
   /// 全 pill popup 协调器（KOS `DockModelService.activeDockPopup`；null →
   /// 无协调，独立宿主/单测退化）。trash 菜单与清空确认弹窗都计入单例。
   final DockPopupCoordinator? coordinator;
+
+  /// 波形下发的槽位宽/scale（TASK-11：trash 槽纳入行级高斯波，与应用
+  /// 图标同权重——quickshell `DockLayout.js` kinds 含 trash）。
+  final double? slotSize;
+  final double iconScale;
 
   @override
   ConsumerState<TrashIcon> createState() => _TrashIconState();
@@ -213,6 +220,8 @@ class _TrashIconState extends ConsumerState<TrashIcon>
           services: widget.services,
           // KOS displayName（DockContainer.qml:587）。
           semanticLabel: '回收站',
+          slotSize: widget.slotSize,
+          iconScale: widget.iconScale,
           onTap: () => unawaited(_openTrash()),
           onSecondaryTap: _openMenu,
           onLongPress: _openMenu,

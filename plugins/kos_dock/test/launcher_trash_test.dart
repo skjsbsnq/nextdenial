@@ -404,15 +404,16 @@ Future<void> _openTrashMenu(WidgetTester tester) async {
   await tester.pump(const Duration(milliseconds: 200));
 }
 
-/// 图标子树内最大 Transform scale（放大弹簧的手感量）。
-double _maxScale(WidgetTester tester, Finder icon) {
-  var scale = 1.0;
-  for (final transform in tester.widgetList<Transform>(
-    find.descendant(of: icon, matching: find.byType(Transform)),
-  )) {
-    scale = math.max(scale, transform.transform.getMaxScaleOnAxis());
-  }
-  return scale;
+/// TASK-11 波形 scale 探针：图标布局尺寸 = `dockWaveLayout` 下发的槽宽
+/// `size·weight·scale`（DockIcon/DockControlIcon 的 `slotSize` 直绑），
+/// 不再是槽内 Transform——故用「实测宽 ÷ iconSlotSize」归一化成 scale。
+/// TASK-12：槽位列 `Positioned` 宽取 `span`（size+gap，最后一个槽无尾
+/// gap 除外）、槽位盒经 `OverflowBox(bottomCenter)` 底锚向上溢出——
+/// 渲染盒宽被 span 污染，改用「实测**高** ÷ iconSlotSize」：槽位盒
+/// 高 = `size`（iconSlotSize·scale），干净隔离 scale。
+double _waveScale(WidgetTester tester, Finder icon) {
+  final metrics = DockMetricsScope.of(tester.element(icon));
+  return tester.getSize(icon).height / metrics.iconSlotSize;
 }
 
 /// 图标子树内是否出现 hover 高亮（`_hovering` 的目标 opacity = 1）。
@@ -422,10 +423,11 @@ bool _hoverHighlightOn(WidgetTester tester, Finder icon) => tester
     )
     .any((widget) => widget.opacity == 1.0);
 
-/// 把 [icon] 的放大弹簧推进到**稳态**，返回稳态 scale。
+/// 把 [icon] 的波形推进到**稳态**，返回稳态 scale（实测宽/iconSlotSize）。
 ///
 /// 「稳态」= 连续 8 帧采样差 < 1e-4，且至少推进 12 帧（避免目标值还没在
-/// 帧后回调里落地就误判为静止）。弹簧过冲区（≈2%）不会被当成峰值。
+/// 帧后回调里落地就误判为静止）。TASK-11：唯一缓动是行级振幅包络
+/// （disableAnimations 下直写终值），槽位 scale 每帧直算无逐图标 spring。
 Future<double> _scaleAtRest(
   WidgetTester tester,
   Finder icon, {
@@ -437,7 +439,7 @@ Future<double> _scaleAtRest(
   var stable = 0;
   for (var i = 0; i < maxFrames; i++) {
     await tester.pump(step);
-    final current = _maxScale(tester, icon);
+    final current = _waveScale(tester, icon);
     if (!previous.isNaN && (current - previous).abs() < 1e-4) {
       stable++;
       if (stable >= 8 && i >= 12) return current;
@@ -446,66 +448,104 @@ Future<double> _scaleAtRest(
     }
     previous = current;
   }
-  fail('$label：放大弹簧未在 ${maxFrames * step.inMilliseconds}ms 内收敛（末值 $previous）');
+  fail('$label：波形未在 ${maxFrames * step.inMilliseconds}ms 内收敛（末值 $previous）');
 }
 
-/// 把指针移到全局 x（y 取 [y]）并推进到 [icon] 的放大稳态，返回稳态 scale。
-Future<double> _hoverAndSettle(
-  WidgetTester tester,
-  TestGesture gesture,
-  Finder icon,
-  double x,
-  double y, {
+/// 等 `dock.pinned` 带盒宽收敛：宽 = max(静止, 当帧 Σspan)，连续 8 帧差
+/// <1e-4 且至少推进 12 帧视为稳态（与 `_scaleAtRest` 同判据）。
+Future<double> _bandWidthAtRest(
+  WidgetTester tester, {
   required String label,
+  int maxFrames = 200,
+  Duration step = const Duration(milliseconds: 16),
 }) async {
-  await gesture.moveTo(Offset(x, y));
-  return _scaleAtRest(tester, icon, label: label);
+  final band = find.byKey(const Key('dock.pinned'));
+  var previous = double.nan;
+  var stable = 0;
+  for (var i = 0; i < maxFrames; i++) {
+    await tester.pump(step);
+    final current = tester.getSize(band).width;
+    if (!previous.isNaN && (current - previous).abs() < 1e-4) {
+      stable++;
+      if (stable >= 8 && i >= 12) return current;
+    } else {
+      stable = 0;
+    }
+    previous = current;
+  }
+  fail('$label：图标带/pill 宽未在 ${maxFrames * step.inMilliseconds}ms 内收敛');
 }
 
-/// 槽中心一致性回归（TASK-04 C 验收 / 阻塞 2）。
+/// 槽中心一致性回归（TASK-04 C 验收 / 阻塞 2；TASK-11 语义更新）。
 ///
-/// 断言 [icon] 的**实测**槽中心（`tester.getCenter`，即渲染后的几何）与
-/// 图标内部用于广播判定的槽中心一致：
-/// 1. 指针落在实测槽中心（及其 ±2px）时，稳态放大 = 满峰值
-///    `kDockMagnificationMaxScale`（±0.01，稳态由 [_scaleAtRest] 判定，
-///    不取弹簧过冲的瞬时值）；
-/// 2. hover 触发边界两侧各 1px 钉住中心：实测中心 ∓(slotSize/2−1) 触发、
-///    ∓(slotSize/2+1) 不触发 → 内部中心与实测中心偏差 < 1px（峰值平台
-///    本身在 ±2px 内变化 < 1e-4，只有硬阈值边界能钉住中心）。
+/// 断言 [icon] 的**静止槽中心**与波形布局一致：指针落在静止 `center`
+/// 时稳态波形 scale ≈ 满峰值 `kDockWaveMaxScale`（±0.02；wave 是布局尺寸
+/// `_waveScale` 探针，无逐图标 spring 过冲）。
+///
+/// quickshell 语义：高斯距离 `d=(pointer−center)/σ` 的 `center` 是**未缩放**
+/// 静止布局槽中心（DockLayout.js:16-17 明令禁用已缩放坐标，否则 dock 追
+/// 鼠标自激）。指针放大后槽位被推开，`tester.getCenter`（scaled 中心）相对
+/// 静止 center 有「前面槽累积放大 + 本槽半宽膨胀」的正偏移，边缘槽可达
+/// ~10px → d≈0.6σ → scale 掉到 ~1.4 而非 1.5。故**不能**用 scaled 中心
+/// 当峰值点。
+///
+/// 取法：先把指针移出容器（远负 x）让全槽 scale=1 回到静止布局，此时
+/// `getCenter` 即静止 center 映射到全局；再移回该点测峰值。
 ///
 /// 一次性缓存槽中心的缺陷（入场/`showLauncher`/`showTrash`/重排后偏移
-/// 数十 px）会让第 2 条必然失败、第 1 条偏离 → 返回稳态峰值供跨图标比较。
+/// 数十 px）会让峰值断言偏离 → 返回稳态峰值供跨图标比较。
+/// TASK-11 移除旧「hover 边界 ±1px 钉住中心」断言：高斯波下槽位边缘本身
+/// 随指针连续膨胀，「边缘两侧 1px」不再是固定阈值（hover 亮斑仍是布尔
+/// 判定，中心处恒真，见下）。
 Future<double> _expectSlotCenterAligned(
   WidgetTester tester,
   TestGesture gesture,
   Finder icon, {
   required String label,
 }) async {
-  // 先让入场/位移动画走到稳态再测量槽位矩形（入场 `Transform.translate`
-  // 会移动视觉位置，稳定后再测才不会把动画中间态当布局）。
+  // 先让入场/位移动画走到稳态（入场 `Transform.translate` 会移动视觉位置，
+  // 稳定后再测才不会把动画中间态当布局）。
   await _scaleAtRest(tester, icon, label: '$label（入场/位移稳态）');
+  // 移出容器到远负 x → 全槽 scale=1 静止布局，量静止中心的全局 x。
+  // y 取图标当前纵中心即可（水平位移只影响 x）。
+  final y = tester.getCenter(icon).dy;
+  await gesture.moveTo(Offset(-4000, y));
+  await _scaleAtRest(tester, icon, label: '$label（无指针静止）');
   final centre = tester.getCenter(icon);
-  // 方案 C：槽半宽取图标所在 DockMetricsScope 的反解值（随宽度/条目变），
-  // 不是编译期常量。
-  final edge = DockMetricsScope.of(tester.element(icon)).iconSlotSize / 2;
+
+  // TASK-12 缺陷3：pill 宽随当帧 Σspan 对称外扩（`Align.bottomCenter`
+  // 居中重排）→ 放大态下 pill 左缘左移 Δ/2、带盒跟着左移。静止**全局**
+  // 中心因此不再是稳态峰值点；但带内**局部** x 与 Σspan 无关——把瞄点取
+  // 作「带左缘全局 x + 静止局部中心」，无论 pill 扩到哪都钉在同一局部
+  // 坐标。`gesture.moveTo` 触发 hover → 带每帧可能继续左移 → 瞄一次不够：
+  // 反复「等带宽收敛 → 按新带左缘重瞄」直到带内局部指针 x 稳定（≤3 轮，
+  // 每轮 220ms 包络重爬；收敛后局部 x 不动 → 不再触发新波形）。
+  final band = find.byKey(const Key('dock.pinned'));
+  final restingLocalCenter =
+      centre.dx - tester.getTopLeft(band).dx;
+
+  Future<double> settleAtLocal(double localX) async {
+    var lastGlobal = double.nan;
+    for (var round = 0; round < 4; round++) {
+      final globalX = tester.getTopLeft(band).dx + localX;
+      if ((globalX - lastGlobal).abs() < 0.01) break;
+      lastGlobal = globalX;
+      await gesture.moveTo(Offset(globalX, centre.dy));
+      await _bandWidthAtRest(tester, label: label);
+    }
+    return _scaleAtRest(tester, icon, label: label, maxFrames: 200);
+  }
 
   double peak = 0;
   for (final dx in const <double>[0, -2, 2]) {
-    final scale = await _hoverAndSettle(
-      tester,
-      gesture,
-      icon,
-      centre.dx + dx,
-      centre.dy,
-      label: '$label（槽中心 ${dx >= 0 ? '+' : ''}${dx}px 稳态）',
-    );
+    final scale = await settleAtLocal(restingLocalCenter + dx);
     peak = math.max(peak, scale);
     if (dx == 0) {
-      // 中心处必须满峰值（±0.01）。
+      // 中心与静止 center 的 ~1px 漂移 → scale 峰值差 < 0.02）。
       expect(
         scale,
-        closeTo(kDockMagnificationMaxScale, 0.01),
-        reason: '$label：指针在实测槽中心时应达到峰值 $kDockMagnificationMaxScale',
+        closeTo(kDockWaveMaxScale, 0.02),
+        reason: '$label：指针在实测槽中心时波形应达到峰值 $kDockWaveMaxScale',
       );
       expect(
         _hoverHighlightOn(tester, icon),
@@ -516,27 +556,9 @@ Future<double> _expectSlotCenterAligned(
   }
   expect(
     peak,
-    closeTo(kDockMagnificationMaxScale, 0.01),
-    reason: '$label：槽中心 ±2px 峰值平台应达到 $kDockMagnificationMaxScale',
+    closeTo(kDockWaveMaxScale, 0.02),
+    reason: '$label：槽中心 ±2px 峰值平台应达到 $kDockWaveMaxScale',
   );
-
-  for (final side in const <double>[-1, 1]) {
-    final inside = centre.dx + side * (edge - 1);
-    await gesture.moveTo(Offset(inside, centre.dy));
-    await _pumpUntil(
-      tester,
-      () => _hoverHighlightOn(tester, icon),
-      label: '$label：槽内侧（${side < 0 ? '左' : '右'} 1px）应触发 hover',
-    );
-    final outside = centre.dx + side * (edge + 1);
-    await gesture.moveTo(Offset(outside, centre.dy));
-    await _pumpUntil(
-      tester,
-      () => !_hoverHighlightOn(tester, icon),
-      label: '$label：槽外侧（${side < 0 ? '左' : '右'} 1px）不应触发 hover'
-          '（槽中心必须按当前布局重测）',
-    );
-  }
   return peak;
 }
 
@@ -577,7 +599,9 @@ void main() {
       await _settle(tester);
 
       expect(
-        tester.getSize(find.byType(LauncherIcon)).width,
+        // TASK-12：渲染盒宽被 slot `Positioned` 的 span（size+gap）污染；
+        // 槽位盒高 = size = iconSlotSize，用 height 取真实槽位边长。
+        tester.getSize(find.byType(LauncherIcon)).height,
         // KosDockShell（800 宽、空 prefs）→ 与 shell 相同的反解槽宽。
         closeTo(
           DockMetrics.fromWidth(800).iconSlotSize,
@@ -893,14 +917,21 @@ void main() {
       // 隐藏 trash：pill 少一个固定槽位（`Align.bottomCenter` 重新居中）→
       // 图标行整体左移（不是一整个槽位：左边界也跟着内缩）。方案 C 起槽宽/
       // pill 宽是 `DockMetrics.fromWidth` 的反解值；kate 中心 = 条带左边距 +
-      // hpad + 固定槽位 + 图标区 Center 内缩 + slot/2，期望位移用同一组
-      // metrics 字段按渲染几何现算（含 dockWidth↔自然宽的 ~0.5px 舍入余量）。
+      // hpad + 固定槽位移距 + slot/2，期望位移用同一组 metrics 字段按渲染
+      // 几何现算（含 dockWidth↔自然宽的 ~0.5px 舍入余量）。
       double kateCenter(DockMetrics m, {required int slotsBefore}) {
         final s = m.iconSlotSize;
-        // 固定槽位 launcher/trash 是等宽独立 Row 子节点，槽后无 itemSpacing
-        // （itemSpacing 只烘进 pinned 条目之间与 divider margin）；kate 为
-        // pinned 段首项，图标区 Center 内缩 0（content 宽 == dock.pinned 槽宽）。
-        return (800 - m.dockWidth) / 2 + m.hPadding + slotsBefore * s + s / 2;
+        final g = m.itemSpacing;
+        // TASK-11：launcher/trash 与 pinned 纳入同一 `dockWaveLayout`，每槽
+        // `span = size·weight·scale + gap`——静止（scale=1）时槽位移距 =
+        // `iconSlotSize + itemSpacing`（不再像旧固定槽位那样把间距烘进槽宽）。
+        // kate 为 pinned 段首项，图标区 Center 内缩 0；其图标视觉中心 =
+        // `slotsBefore·(s+g)`（前面各槽完整移距）+ `s/2`（本槽视觉边长中心，
+        // gap 尾随在右不计入中心）。
+        return (800 - m.dockWidth) / 2 +
+            m.hPadding +
+            slotsBefore * (s + g) +
+            s / 2;
       }
 
       final beforeTrashToggle = tester.getCenter(_pinnedIcon('kate')).dx;
@@ -948,6 +979,10 @@ void main() {
       );
 
       // 再隐藏 launcher → icon 行继续左移（kate 之前只剩 pinned 段首项）。
+      // 上面 `_expectSlotCenterAligned` 把指针停在了被测图标上（放大态），
+      // 几何量测前必须先把指针移出容器回到静止布局，否则 kate 槽仍放大。
+      await gesture.moveTo(const Offset(-4000, 0));
+      await _scaleAtRest(tester, _pinnedIcon('kate'), label: 'launcher 切换前静止');
       final beforeLauncherToggle = tester.getCenter(_pinnedIcon('kate')).dx;
       await container
           .read(dockPreferencesProvider.notifier)
@@ -957,8 +992,13 @@ void main() {
         () => find.byType(LauncherIcon).evaluate().isEmpty,
         label: 'showLauncher=false 后 LauncherIcon 应立即移除',
       );
-      await _pumpFrames(tester, 30);
+      // launcher 是首槽：移除它把后续槽整体左移，pinned 槽各自带入场交错
+      // 弹簧（60ms×index + Motion），比末槽 trash 移除收敛慢 → 多给帧数。
+      await _pumpFrames(tester, 60);
       expect(find.byType(LauncherIcon), findsNothing);
+      // 指针仍停在原全局 x（可能落在放大槽上）→ 先移出再量静止几何。
+      await gesture.moveTo(const Offset(-4000, 0));
+      await _scaleAtRest(tester, _pinnedIcon('kate'), label: 'launcher 切换后静止');
       final afterLauncherToggle = tester.getCenter(_pinnedIcon('kate')).dx;
       expect(afterLauncherToggle, lessThan(beforeLauncherToggle));
       final mLauncherOff = DockMetrics.fromWidth(
@@ -1013,14 +1053,43 @@ void main() {
         lessThan(tester.getCenter(_pinnedIcon('dolphin')).dx),
       );
 
-      // 等价「拖拽结束后框架回调 onReorder」：把第 0 项移到第 1 位。
-      final list = tester.widget<ReorderableListView>(
-        find.byType(ReorderableListView),
-      );
-      list.onReorderItem!(0, 1);
-      // ReorderableListView 会以新 index 建 element → 行内入场动画重播，
-      // 有界推进到稳态后再量几何（否则会把入场中间态当成布局中心）。
+      // TASK-11：ReorderableListView 已移除 → 无 onReorderItem 回调可模拟；
+      // 用真实指针拖拽驱动手写重排（行级 Listener：按下 pinned 槽位 → 水平
+      // 位移超 kDockReorderDragThreshold 进 reorder 态 → 拖过 dolphin 槽位
+      // 中线换插入位 → 松手 _reorder → _savePins 写回）。
+      //
+      // 落点取 dolphin 槽**右缘内侧**（中线 = 槽几何中心 = icon 中心 + g/2，
+      // 因 gap 尾随在右）：`+g` 明确跨过中线换到 gap=2，又不越出槽位触发
+      // dropOutside。分多步 move 让 onPointerMove 逐帧推进（阈值判定与中线
+      // 判定是两个独立分支，单步大跳可能被先决阈值门拦下后同一帧才算 gap）。
+      final kate = tester.getCenter(_pinnedIcon('kate'));
+      final dolphin = tester.getCenter(_pinnedIcon('dolphin'));
+      final metrics =
+          DockMetricsScope.of(tester.element(_pinnedIcon('dolphin')));
+      final step = metrics.iconSlotSize + metrics.itemSpacing;
+      // `getCenter` 返回槽中心 = 槽中线（icon 占满 span）。中线恰好是
+      // `dockWaveInsertionIndex` 的判定边界（`x < start+span/2` 严格小于），
+      // down 在中线上会命中**下一槽** dolphin。故 down 落点左移 gap，确保
+      // 落在 kate 槽中线左侧（hit → source=kate）。
+      final kateDown = kate - Offset(metrics.itemSpacing, 0);
+      await gesture.down(kateDown);
+      await tester.pump();
+      // 先过启动阈值（kDockReorderDragThreshold+2 > 阈值），进 reorder 态。
+      await gesture.moveTo(kateDown + Offset(kDockReorderDragThreshold + 2, 0));
+      await tester.pump();
+      // 逐步跨过 dolphin 槽中线（中线迟滞 ±6px，落点要给足余量）。
+      await gesture.moveTo(dolphin + Offset(step / 2, 0));
+      await tester.pump();
+      await gesture.moveTo(dolphin + Offset(step - 2, 0));
+      await tester.pump();
+      await gesture.up();
+      // 重排后 key 绑条目的槽位序更新 + 持久化写回；有界推进到稳态再量几何。
       await _pumpFrames(tester, 40);
+      expect(
+        store.written?.map((p) => p.appId).toList(),
+        ['dolphin', 'kate'],
+        reason: '拖到 dolphin 槽位右侧落位 → pinned 顺序写回应为 dolphin,kate',
+      );
       expect(
         tester.getCenter(_pinnedIcon('kate')).dx,
         greaterThan(tester.getCenter(_pinnedIcon('dolphin')).dx),
