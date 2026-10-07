@@ -12,15 +12,14 @@
 ///   → 本端相对 top-left：`left = 336 - offsetRight - cardWidth`）：
 ///   wifi/bluetooth pill（137×59 r29.5，Panel:528-812）、媒体卡
 ///   （151×127 r25，:815-907）、亮度/音量条（296×57 r19，:1132-1287）；
-///   **52px 胶囊卡（截图/主题/电源/勿扰/夜灯，:909-1129）与通知历史卡
-///   （:1293-1443）v1 隐藏** → 亮度/音量条上移补空（155/220，KOS 217/282），
-///   面板高缩为内容高（记 docs/visual-deltas.md）；
-/// - 四个子页 wifi/bluetooth/brightness/sound（submenuCard 296 宽，高
+///   52px 快捷卡（截图/主题/电源/勿扰/夜灯，:909-1129）恢复原版布局；
+///   夜灯保留禁用提示，通知历史仍待实现。
+/// - 子页 wifi/bluetooth/brightness/sound + 电源会话页（submenuCard 296 宽，高
 ///   360/340/280/420，Panel:1853-1860）：共用 header（返回钮 26 + 标题 +
 ///   wifi/bt 开关球 38×22，:1894-2002）+ 分隔线；页内导航 `PageMotion`
 ///   crossfade 200ms OutCubic + 0.96↔1 scale + 8px 位移（common/PageMotion.qml
 ///   :4-5、Panel:347-371）；
-/// - 「坍缩回源胶囊 morph」/ thumb wobble / 通知卡 / 会话页 / 设置入口
+/// - 「坍缩回源胶囊 morph」/ thumb wobble / 通知卡 / 设置入口
 ///   （`settings.open kcm_*`）v1 砍掉记 deltas；
 /// - 数据源：`networkConnectivityProvider`/`bluetoothProvider`（同 TASK-08，
 ///   子页复用 `DockWifiNetworkListBody`/`DockBluetoothDeviceListBody`）、
@@ -36,6 +35,7 @@ import 'dart:typed_data';
 import 'package:denial_flutter_sdk/services.dart' show ShellServices;
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/state.dart';
+import 'package:denial_flutter_sdk/settings.dart';
 import 'package:denial_flutter_sdk/surfaces.dart' show DisplayOutput;
 import 'package:denial_flutter_sdk/system_services.dart';
 import 'package:denial_flutter_sdk/tokens.dart' show ShellText;
@@ -54,6 +54,7 @@ double dockControlCenterPageHeight(String page) => switch (page) {
   'wifi' => kDockControlCenterWifiPageHeight,
   'bluetooth' => kDockControlCenterBluetoothPageHeight,
   'sound' => kDockControlCenterSoundPageHeight,
+  'session' => 420,
   // brightness 与未知页取 280（KOS else 分支同式）。
   _ => kDockControlCenterBrightnessPageHeight,
 };
@@ -134,6 +135,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
 
   /// 当前展示页（`''` = 主页面，其余 = 子页名，KOS `displayedPage`）。
   String _page = '';
+  ProviderContainer? _sessionContainer;
 
   /// crossfade 出场页（KOS `outgoingPage`，动画结束后清空）。
   String? _outgoing;
@@ -181,15 +183,18 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
   @override
   void initState() {
     super.initState();
-    _pageMotion = AnimationController(
-      vsync: this,
-      duration: kDockControlCenterPageDuration,
-    )..addStatusListener((status) {
-      // crossfade 播完才丢弃出场页（KOS `outgoingPage` 同语义）。
-      if (status == AnimationStatus.completed && mounted && _outgoing != null) {
-        setState(() => _outgoing = null);
-      }
-    });
+    _pageMotion =
+        AnimationController(
+          vsync: this,
+          duration: kDockControlCenterPageDuration,
+        )..addStatusListener((status) {
+          // crossfade 播完才丢弃出场页（KOS `outgoingPage` 同语义）。
+          if (status == AnimationStatus.completed &&
+              mounted &&
+              _outgoing != null) {
+            setState(() => _outgoing = null);
+          }
+        });
     // 静止态 = displayed 页完全展开（KOS progress 1）。
     _pageMotion.value = 1;
     final audio = ref.read(audioServiceProvider);
@@ -232,6 +237,21 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
   @override
   void dispose() {
     // 周期表与 Esc 钩子随面板卸载停/注销（面板内容只在开着时挂载）。
+    final sessionContainer = _sessionContainer;
+    if (sessionContainer != null) {
+      final sessionSubscription = sessionContainer.listen(
+        sessionPowerProvider.notifier,
+        (_, _) {},
+      );
+      // Closing the popup disposes this widget during tree finalization.
+      // Clear the shared confirmation after that lifecycle phase has ended.
+      scheduleMicrotask(() {
+        if (!sessionSubscription.closed) {
+          sessionSubscription.read().cancelConfirmation();
+          sessionSubscription.close();
+        }
+      });
+    }
     _appRefreshTimer?.cancel();
     _refreshTimer?.cancel();
     _anchor?.setEscapeHandler(null);
@@ -259,7 +279,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
   ///
   /// `requestSerial` 命中本端最近一次 `apply()` 时是自身回写回显，跳过以
   /// 免拖动被拉回（KOS 侧靠 `volumeChangeInProgress` 抑制，SDK 无该标记
-  /// → 记 docs/visual-deltas.md）。
+  /// → 记 docs/dock-port/TASK-09-control-center.md）。
   void _onAudioLevel(AudioLevelState state) {
     if (_lastAppliedSerial != 0 && state.requestSerial == _lastAppliedSerial) {
       return;
@@ -277,10 +297,15 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
   }
 
   /// KOS `Shortcut { sequence: "Escape" }`（Panel:512-524）的分步：确认框
-  /// 分支 v1 无（会话页砍掉）→ 子页开着先 `closeSubmenu()`（回主页面）；
+  /// 先取消会话确认，再退回主页面；
   /// 已回主页面 → false（未消费）→ anchor 关整面板。
   @override
   bool handleEscapeStep() {
+    if (_page == 'session' &&
+        ref.read(sessionPowerProvider).confirmationAction != null) {
+      ref.read(sessionPowerProvider.notifier).cancelConfirmation();
+      return true;
+    }
     if (_page.isEmpty) return false;
     _openPage('');
     return true;
@@ -295,6 +320,13 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
   /// 时长（`enterDuration * (1 - progress)`）；progress 已到 1 才从 0 起播。
   void _openPage(String page) {
     if (_page == page) return;
+    if (_page == 'session') {
+      ref.read(sessionPowerProvider.notifier).cancelConfirmation();
+    }
+    if (page == 'session') {
+      _sessionContainer = ProviderScope.containerOf(context, listen: false);
+      ref.read(sessionPowerProvider.notifier).clearError();
+    }
     final previous = _page;
     setState(() {
       _outgoing = previous;
@@ -649,11 +681,90 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
             ),
           ),
         ),
-        // ── 砍掉的卡（v1 隐藏，不伪造占位；见 deltas）──────────────
-        // 截图(:910-944)、深色模式(:947-993)、电源/会话(:996-1037)、
-        // 勿扰(:1040-1083)、夜灯(:1086-1129)、通知历史(:1293-1443)
-        // ——SDK 无 screenshot.capture / theme.toggle / session.* /
-        // nightlight.toggle / 通知历史数据源，v1 不渲染。
+        for (final (index, id, label, icon, active, callback) in [
+          (
+            0,
+            'screenshot',
+            '截图',
+            Icons.screenshot_monitor,
+            false,
+            () {
+              final actions = ref.read(systemActionsServiceProvider);
+              _anchor?.togglePanel();
+              // Wait for the popup exit animation before capturing the desktop.
+              unawaited(
+                Future<void>.delayed(
+                  const Duration(milliseconds: 260),
+                  actions.takeScreenshot,
+                ),
+              );
+            },
+          ),
+          (
+            1,
+            'theme',
+            '深色模式',
+            Icons.dark_mode_outlined,
+            theme.brightness == Brightness.dark,
+            () {
+              ref
+                  .read(shellSettingsProvider.notifier)
+                  .setColorSchemePreference(
+                    theme.brightness == Brightness.dark
+                        ? DesktopColorSchemePreference.preferLight
+                        : DesktopColorSchemePreference.preferDark,
+                  );
+            },
+          ),
+          (
+            2,
+            'power',
+            '电源',
+            Icons.power_settings_new,
+            false,
+            () => _openPage('session'),
+          ),
+          (
+            3,
+            'dnd',
+            '勿扰',
+            Icons.notifications_off_outlined,
+            ref.watch(desktopNotificationsProvider).doNotDisturb,
+            () => ref
+                .read(desktopNotificationsProvider.notifier)
+                .toggleDoNotDisturb(),
+          ),
+          (
+            4,
+            'nightlight',
+            '夜灯（当前 SDK 不支持）',
+            Icons.nightlight_outlined,
+            false,
+            null,
+          ),
+        ])
+          Positioned(
+            left: 20 + index * 61,
+            top: 155,
+            width: 52,
+            height: 52,
+            child: Tooltip(
+              message: label,
+              child: DockStatusPanelSurface(
+                radius: 26,
+                child: IconButton(
+                  key: ValueKey<String>('cc.$id'),
+                  tooltip: label,
+                  onPressed: callback,
+                  icon: Icon(
+                    icon,
+                    color: active ? theme.accent : null,
+                    size: 24,
+                  ),
+                ),
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -699,15 +810,14 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
                 height: kDockControlCenterMediaArtSize,
                 color: colors.tileOff,
                 child: switch (artBytes.value) {
-                  final Uint8List bytes? when bytes.isNotEmpty =>
-                    Image.memory(
-                      bytes,
-                      fit: BoxFit.cover,
-                      gaplessPlayback: true,
-                      // 媒体封面原图远大于 kDockControlCenterMediaArtSize
-                      // 缩略框：medium 双线性降采样消边缘锯齿。
-                      filterQuality: FilterQuality.medium,
-                    ),
+                  final Uint8List bytes? when bytes.isNotEmpty => Image.memory(
+                    bytes,
+                    fit: BoxFit.cover,
+                    gaplessPlayback: true,
+                    // 媒体封面原图远大于 kDockControlCenterMediaArtSize
+                    // 缩略框：medium 双线性降采样消边缘锯齿。
+                    filterQuality: FilterQuality.medium,
+                  ),
                   _ => placeholder,
                 },
               ),
@@ -943,20 +1053,21 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
       'bluetooth' => '蓝牙',
       'brightness' => '显示亮度',
       'sound' => '声音',
+      'session' => '电源与会话',
       _ => '',
     };
     final Widget? trailing = switch (page) {
       'wifi' => _pageToggle(
-        checked: ref.watch(networkConnectivityProvider).snapshot.wirelessEnabled,
+        checked: ref
+            .watch(networkConnectivityProvider)
+            .snapshot
+            .wirelessEnabled,
         busy: ref.watch(networkConnectivityProvider).radioChanging,
         onToggle: () => unawaited(
           ref
               .read(networkConnectivityProvider.notifier)
               .setWirelessEnabled(
-                !ref
-                    .read(networkConnectivityProvider)
-                    .snapshot
-                    .wirelessEnabled,
+                !ref.read(networkConnectivityProvider).snapshot.wirelessEnabled,
               ),
         ),
       ),
@@ -1041,7 +1152,59 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
     onToggle: onToggle,
   );
 
+  Widget _sessionPage(BuildContext context) {
+    final state = ref.watch(sessionPowerProvider);
+    final controller = ref.read(sessionPowerProvider.notifier);
+    const labels = {
+      SessionPowerAction.lock: '锁定',
+      SessionPowerAction.logout: '注销',
+      SessionPowerAction.suspend: '睡眠',
+      SessionPowerAction.hibernate: '休眠',
+      SessionPowerAction.reboot: '重启',
+      SessionPowerAction.powerOff: '关机',
+    };
+    final confirmation = state.confirmationAction;
+    return ListView(
+      padding: const EdgeInsets.all(12),
+      children: [
+        if (state.error != null)
+          Text(
+            state.error!,
+            style: TextStyle(color: context.shellColors.textPrimary),
+          ),
+        if (confirmation != null) ...[
+          Text(
+            '确认${labels[confirmation]}？',
+            style: TextStyle(color: context.shellColors.textPrimary),
+          ),
+          TextButton(
+            onPressed: state.busy ? null : controller.cancelConfirmation,
+            child: const Text('取消'),
+          ),
+          TextButton(
+            key: const ValueKey<String>('cc.session.confirm'),
+            onPressed: state.busy
+                ? null
+                : () => unawaited(controller.confirm()),
+            child: Text('确认${labels[confirmation]}'),
+          ),
+        ] else
+          for (final action in SessionPowerAction.values)
+            ListTile(
+              key: ValueKey<String>('cc.session.${action.name}'),
+              title: Text(labels[action]!),
+              subtitle: state.availabilityFor(action).unavailableReason == null
+                  ? null
+                  : Text(state.availabilityFor(action).unavailableReason!),
+              enabled: !state.busy && state.availabilityFor(action).enabled,
+              onTap: () => unawaited(controller.request(action)),
+            ),
+      ],
+    );
+  }
+
   Widget _pageBody(BuildContext context, String page) => switch (page) {
+    'session' => _sessionPage(context),
     'wifi' => _wifiPage(context),
     'bluetooth' => _bluetoothPage(context),
     'brightness' => _brightnessPage(context),
@@ -1056,11 +1219,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
     final enabled = net.snapshot.wirelessEnabled;
     if (!enabled) {
       // KOS: :2032-2052 — 「Wi‑Fi 已关闭」14 Bold + 说明 12 DemiBold。
-      return _pageOffState(
-        context,
-        title: 'Wi-Fi 已关闭',
-        body: '在上方开启开关以查看附近网络',
-      );
+      return _pageOffState(context, title: 'Wi-Fi 已关闭', body: '在上方开启开关以查看附近网络');
     }
     return Column(
       children: [
@@ -1087,11 +1246,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
     final bt = ref.watch(bluetoothProvider);
     if (!bt.powered) {
       // KOS: :2300-2320 — 「蓝牙已关闭」13 Bold + 说明 11。
-      return _pageOffState(
-        context,
-        title: '蓝牙已关闭',
-        body: '在上方开启开关以连接设备',
-      );
+      return _pageOffState(context, title: '蓝牙已关闭', body: '在上方开启开关以连接设备');
     }
     return Column(
       children: [
@@ -1117,7 +1272,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
   /// 亮度子页（KOS :2519-2625）：每显示器一行 82px（label + % + 滑条）。
   ///
   /// SDK `DisplayOutput` 无 `isInternal` 字段 → KOS 的「内置屏幕/外接显示器」
-  /// 副行省略（记 docs/visual-deltas.md）。
+  /// 副行省略（记 docs/dock-port/TASK-09-control-center.md）。
   Widget _brightnessPage(BuildContext context) {
     final colors = context.shellColors;
     final layout = ref.watch(displayLayoutProvider);
@@ -1167,7 +1322,8 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
     final levels = ref.watch(displayBrightnessProvider).levels;
     final level = levels[output.monitorId] ?? 0;
     final preview = _brightnessPreview;
-    final dragging = _draggingBrightness && _brightnessOutputId == output.monitorId;
+    final dragging =
+        _draggingBrightness && _brightnessOutputId == output.monitorId;
     final value = dragging ? (preview ?? level * 100) : level * 100;
     return Stack(
       children: [
@@ -1239,9 +1395,9 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
   Widget _soundPage(BuildContext context) {
     final colors = context.shellColors;
     final theme = context.shellTheme;
-    final apps = _appStreams.take(kDockControlCenterAppRowCount).toList(
-      growable: false,
-    );
+    final apps = _appStreams
+        .take(kDockControlCenterAppRowCount)
+        .toList(growable: false);
     return Column(
       children: [
         Padding(
@@ -1407,9 +1563,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
                             '没有活动的音频应用',
                             style: TextStyle(
                               fontSize: 10,
-                              color: colors.textPrimary.withValues(
-                                alpha: 0.45,
-                              ),
+                              color: colors.textPrimary.withValues(alpha: 0.45),
                             ),
                           ),
                         )
@@ -1525,7 +1679,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
   /// KOS 的 28px 静音钮（`setApplicationMuted`）与 0-150% 量程 SDK 都没有
   /// （`applyAppStream(id, percent)` 签名只收 0-100 的 percent，
   /// `platform/bridge/audio_client.dart:128-131` 内部 `clamp(0,100)`）→
-  /// 静音钮砍掉、量程取 0-100%（记 docs/visual-deltas.md）。
+  /// 静音钮砍掉、量程取 0-100%（记 docs/dock-port/TASK-09-control-center.md）。
   Widget _appVolumeRow(BuildContext context, AppAudioStream stream) {
     final colors = context.shellColors;
     final theme = context.shellTheme;
@@ -1867,13 +2021,15 @@ class _DockControlCenterPillState extends State<DockControlCenterPill>
                 // 圆开关盘（KOS :542-554）。
                 Positioned(
                   left: kDockControlCenterPillDiscLeft,
-                  top: (kDockControlCenterPillHeight -
+                  top:
+                      (kDockControlCenterPillHeight -
                           kDockControlCenterPillDiscSize) /
                       2,
                   child: Listener(
                     onPointerDown: (_) => setState(() => _discPressed = true),
                     onPointerUp: (_) => setState(() => _discPressed = false),
-                    onPointerCancel: (_) => setState(() => _discPressed = false),
+                    onPointerCancel: (_) =>
+                        setState(() => _discPressed = false),
                     child: GestureDetector(
                       key: const ValueKey<String>('cc.pill.disc'),
                       behavior: HitTestBehavior.opaque,
@@ -1914,7 +2070,8 @@ class _DockControlCenterPillState extends State<DockControlCenterPill>
                                   // toggleInProgress ? 0 : 1`（140ms）。
                                   AnimatedOpacity(
                                     opacity: widget.busy ? 0 : 1,
-                                    duration: kDockControlCenterBusyFadeDuration,
+                                    duration:
+                                        kDockControlCenterBusyFadeDuration,
                                     child: widget.buildDiscGlyph(
                                       context,
                                       checked,
@@ -1927,7 +2084,8 @@ class _DockControlCenterPillState extends State<DockControlCenterPill>
                                       'cc.pill.spinner',
                                     ),
                                     opacity: widget.busy ? 1 : 0,
-                                    duration: kDockControlCenterBusyFadeDuration,
+                                    duration:
+                                        kDockControlCenterBusyFadeDuration,
                                     child: RotationTransition(
                                       turns: _spin,
                                       child: CustomPaint(
@@ -2065,15 +2223,14 @@ class DockControlCenterBusyArcPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(DockControlCenterBusyArcPainter old) =>
-      old.color != color;
+  bool shouldRepaint(DockControlCenterBusyArcPainter old) => old.color != color;
 }
 
 /// 控制中心滑条（KOS `bar/ControlCenterSlider.qml` → `LiquidSlider` 的
 /// Flutter 近似）：高 30（可覆写）、track 4、白 thumb 36×18 r9、两阶段
 /// `onPreviewChanged`（拖动实时）/`onCommitRequested`（松手提交）。
 ///
-/// v1 差异（记 docs/visual-deltas.md）：LiquidSlider 的 thumb 展开
+/// v1 差异（记 docs/dock-port/TASK-09-control-center.md）：LiquidSlider 的 thumb 展开
 /// （270ms OutBack 1.36 / 460ms OutQuint）+ wobble squash-stretch 与玻璃
 /// 透镜高光不做；轨道/进度/thumb 颜色由调用方传语义 role（KOS glass
 /// `rgba(1,1,1,0.17)`/`0.42` + `#ffffff`）。
@@ -2218,7 +2375,12 @@ class DockControlCenterTrackPainter extends CustomPainter {
     if (center > 0) {
       canvas.drawRRect(
         RRect.fromRectAndRadius(
-          Rect.fromLTWH(0, midY - radius, center, kDockControlCenterTrackHeight),
+          Rect.fromLTWH(
+            0,
+            midY - radius,
+            center,
+            kDockControlCenterTrackHeight,
+          ),
           Radius.circular(radius),
         ),
         Paint()..color = accent,
@@ -2342,9 +2504,7 @@ class _DockControlCenterSwitch extends StatelessWidget {
               // KOS: :1984-1985 — `x` Behavior 160ms OutCubic。
               duration: kDockControlCenterSwitchDuration,
               curve: Curves.easeOutCubic,
-              alignment: checked
-                  ? Alignment.centerRight
-                  : Alignment.centerLeft,
+              alignment: checked ? Alignment.centerRight : Alignment.centerLeft,
               child: Container(
                 width: thumb,
                 height: thumb,
@@ -2385,7 +2545,10 @@ class DockControlCenterVolumeGlyph extends CustomPainter {
     final designHeight = large
         ? kDockControlCenterSubmenuGlyphHeight
         : kDockControlCenterVolumeGlyphSize;
-    final scale = math.min(size.width / designWidth, size.height / designHeight);
+    final scale = math.min(
+      size.width / designWidth,
+      size.height / designHeight,
+    );
     canvas.save();
     canvas.scale(scale, scale);
     final fill = Paint()

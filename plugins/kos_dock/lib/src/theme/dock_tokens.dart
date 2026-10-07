@@ -1545,13 +1545,12 @@ const double kDockControlCenterMediaTop = 20;
 const double kDockControlCenterBarWidth = 296;
 const double kDockControlCenterBarHeight = 57;
 
-/// 亮度/音量条纵向坐标（px）：**紧凑重排**——KOS 为 217/282（:1135,:1204），
-/// 中间 52px 胶囊卡与通知历史卡 v1 砍掉后上移补空（记 deltas）。
-const double kDockControlCenterBrightnessTop = 155;
-const double kDockControlCenterVolumeTop = 220;
+/// 亮度/音量条纵向坐标（px）：KOS 为 217/282（:1135,:1204）。
+const double kDockControlCenterBrightnessTop = 217;
+const double kDockControlCenterVolumeTop = 282;
 
-/// 主页面紧凑内容高（px）：`220 + 57 + 20`。
-const double kDockControlCenterMainHeight = 297;
+/// 主页面紧凑内容高（px）：`282 + 57 + 20`。
+const double kDockControlCenterMainHeight = 359;
 
 /// pill 内部几何（px）：圆开关盘 39、左 10 居中；文字列 left 58 right 18；
 /// 「›」right 8；整卡点击区（圆盘外）left 49 起。

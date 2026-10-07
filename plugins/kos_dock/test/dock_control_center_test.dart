@@ -3,7 +3,7 @@
 // 覆盖：控制中心格恒显示与 toggle、面板入场动画进度、wifi/bt pill 开关调用
 // （provider）、媒体卡 prev/play/next 调用、亮度/音量滑条 commit 调用
 // （`displayBrightnessProvider.commitLevel` / `audioService.apply`）、子页
-// crossfade 导航、缺口卡（截图/主题/电源/勿扰/夜灯/通知历史/会话）不渲染。
+// crossfade 导航、五个快捷按钮恢复、勿扰切换和会话确认。
 //
 // 依赖注入（CONSTRAINTS §10）：
 // - `networkServiceProvider`/`bluetoothServiceProvider` → 假后端（同 TASK-08）；
@@ -34,6 +34,11 @@ import 'package:kos_dock/src/widgets/dock_status_panels.dart';
 import 'package:kos_dock/src/widgets/dock_wifi_panel.dart';
 import 'package:kos_dock/src/widgets/status_cells.dart';
 import 'package:kos_dock/src/widgets/tray_accessory.dart';
+
+class _FakeSessionPower extends SessionPowerController {
+  @override
+  SessionPowerState build() => SessionPowerState.initial();
+}
 
 // ── fakes ──────────────────────────────────────────────────────────────
 
@@ -173,10 +178,8 @@ class _FakeBridge extends DenialBridge {
 
   final _audioStateStream = StreamController<AudioLevelState>.broadcast();
   final _appStreamStream = StreamController<List<AppAudioStream>>.broadcast();
-  final _deviceStream =
-      StreamController<List<AudioOutputDevice>>.broadcast();
-  final _brightnessStream =
-      StreamController<DenialBrightnessState>.broadcast();
+  final _deviceStream = StreamController<List<AudioOutputDevice>>.broadcast();
+  final _brightnessStream = StreamController<DenialBrightnessState>.broadcast();
 
   double? level = 0.42;
   int appStreamRequests = 0;
@@ -198,8 +201,7 @@ class _FakeBridge extends DenialBridge {
   Stream<List<AppAudioStream>> get audioStreamStates => _appStreamStream.stream;
 
   @override
-  Stream<List<AudioOutputDevice>> get audioDeviceStates =>
-      _deviceStream.stream;
+  Stream<List<AudioOutputDevice>> get audioDeviceStates => _deviceStream.stream;
 
   @override
   Stream<DenialBrightnessState> get brightnessStates =>
@@ -285,9 +287,7 @@ class _FakeMediaCommands implements MediaCommands {
 class _FakeShellServices implements ShellServices {
   _FakeShellServices({MprisPlaybackState? media})
     : mediaState = media ?? MprisPlaybackState.unavailable(),
-      commands = _FakeMediaCommands(
-        media ?? MprisPlaybackState.unavailable(),
-      );
+      commands = _FakeMediaCommands(media ?? MprisPlaybackState.unavailable());
 
   final MprisPlaybackState mediaState;
   final _FakeMediaCommands commands;
@@ -300,7 +300,6 @@ class _FakeShellServices implements ShellServices {
   @override
   ProviderListenable<List<String>> get trayItemIds =>
       Provider((_) => const <String>[]);
-
 
   @override
   ProviderListenable<BatteryStatus> get battery =>
@@ -346,8 +345,7 @@ class _FakeShellServices implements ShellServices {
   Widget buildWindowPreview(BuildContext context, int windowId) =>
       const SizedBox.shrink();
   @override
-  VoidCallback emphasizeWindow(int windowId, {required int monitorId}) =>
-      () {};
+  VoidCallback emphasizeWindow(int windowId, {required int monitorId}) => () {};
   @override
   void toggleDesktop() {}
   @override
@@ -382,6 +380,7 @@ class _FakeShellServices implements ShellServices {
     imageBytesPaths.add(path);
     return Provider((_) => AsyncData(artworkBytes));
   }
+
   @override
   MouseCursor get normalCursor => SystemMouseCursors.basic;
 }
@@ -528,6 +527,8 @@ Widget _wrapTray({
   required _FakeBridge bridge,
 }) => ProviderScope(
   overrides: [
+    notificationPolicyStoreProvider.overrideWithValue(null),
+    sessionPowerProvider.overrideWith(_FakeSessionPower.new),
     networkServiceProvider.overrideWithValue(network),
     bluetoothServiceProvider.overrideWithValue(bluetooth),
     denialBridgeProvider.overrideWithValue(bridge),
@@ -822,7 +823,7 @@ void main() {
     expect(network.wireless, [false]);
   });
 
-  testWidgets('缺口卡不渲染（截图/主题/电源/勿扰/夜灯/通知历史/会话）', (tester) async {
+  testWidgets('快捷按钮恢复，勿扰切换，夜灯显示不可用提示', (tester) async {
     final bridge = _FakeBridge();
     await tester.pumpWidget(
       _wrapTray(
@@ -834,16 +835,85 @@ void main() {
     );
     await _settle(tester);
     await _openPanel(tester);
-    // v1 主页面只有 5 张卡（2 pill + 媒体 + 亮度 + 音量）；52px 胶囊卡与
-    // 通知历史卡整段不渲染（无 SDK 数据源，不造假）。
-    expect(_mainCardCount(tester), 5);
-    for (final label in ['截图', '深色模式', '勿扰', '夜灯', '通知历史', '锁定', '重启']) {
-      expect(find.text(label), findsNothing);
+    expect(_mainCardCount(tester), 10);
+    for (final id in ['screenshot', 'theme', 'power', 'dnd', 'nightlight']) {
+      expect(find.byKey(ValueKey<String>('cc.$id')), findsOneWidget);
     }
-    // 亮度/音量条仍在（重排后位置见 tokens）。
+    final night = tester.widget<IconButton>(
+      find.byKey(const ValueKey<String>('cc.nightlight')),
+    );
+    expect(night.onPressed, isNull);
+    expect(night.tooltip, contains('SDK 不支持'));
+    final context = tester.element(find.byType(DockControlCenterPanel));
+    final container = ProviderScope.containerOf(context);
+    final before = container.read(desktopNotificationsProvider).doNotDisturb;
+    await tester.tap(find.byKey(const ValueKey<String>('cc.dnd')));
+    await tester.pump();
+    expect(container.read(desktopNotificationsProvider).doNotDisturb, !before);
     expect(find.text('显示亮度'), findsOneWidget);
     expect(find.text('声音'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey<String>('cc.power')));
+    await _settle(tester);
+    expect(find.text('电源与会话'), findsOneWidget);
+    await tester.tap(find.byKey(const ValueKey<String>('cc.session.logout')));
+    await tester.pump();
+    expect(
+      container.read(sessionPowerProvider).confirmationAction,
+      SessionPowerAction.logout,
+    );
+    expect(
+      find.byKey(const ValueKey<String>('cc.session.confirm')),
+      findsOneWidget,
+    );
+    await tester.sendKeyEvent(LogicalKeyboardKey.escape);
+    await tester.pump();
+    expect(container.read(sessionPowerProvider).confirmationAction, isNull);
+    expect(find.text('电源与会话'), findsOneWidget);
   });
+
+  for (final unmountScope in [false, true]) {
+    testWidgets(
+      unmountScope ? '会话确认中卸载 ProviderScope 无生命周期异常' : '直接关闭面板清除会话确认',
+      (tester) async {
+        await tester.pumpWidget(
+          _wrapTray(
+            services: _FakeShellServices(),
+            network: _FakeNetworkBackend(snapshot: networkSnapshot()),
+            bluetooth: _FakeBluetoothBackend(snapshot: bluetoothSnapshot()),
+            bridge: _FakeBridge(),
+          ),
+        );
+        await _settle(tester);
+        await _openPanel(tester);
+        final container = ProviderScope.containerOf(
+          tester.element(find.byType(DockControlCenterPanel)),
+        );
+        await tester.tap(find.byKey(const ValueKey<String>('cc.power')));
+        await _settle(tester);
+        await tester.tap(
+          find.byKey(const ValueKey<String>('cc.session.logout')),
+        );
+        await tester.pump();
+        expect(
+          container.read(sessionPowerProvider).confirmationAction,
+          SessionPowerAction.logout,
+        );
+        if (unmountScope) {
+          await tester.pumpWidget(const SizedBox.shrink());
+        } else {
+          await tester.tap(find.byType(DockControlCenterCell));
+          await _settle(tester);
+          expect(
+            container.read(sessionPowerProvider).confirmationAction,
+            isNull,
+          );
+        }
+        await tester.pump();
+        expect(find.byType(DockControlCenterPanel), findsNothing);
+        expect(tester.takeException(), isNull);
+      },
+    );
+  }
 
   // ── TASK-09/09 审查缺陷回归（B1/B2/N1/N3/N4/N5/N6）───────────────────
 
@@ -981,9 +1051,7 @@ void main() {
     await tester.pump();
   });
 
-  testWidgets('蓝牙子页：空列表 + 刷新中 → 头部「正在刷新…」不重复（N2）', (
-    tester,
-  ) async {
+  testWidgets('蓝牙子页：空列表 + 刷新中 → 头部「正在刷新…」不重复（N2）', (tester) async {
     final bluetooth = _FakeBluetoothBackend(
       snapshot: bluetoothSnapshot(available: true),
     );
@@ -1192,9 +1260,7 @@ void main() {
     expect(find.byType(DockControlCenterPanel), findsNothing);
   });
 
-  testWidgets('协调器互斥：控制中心开着点 wifi 格 → 先关控制中心再开 wifi 面板', (
-    tester,
-  ) async {
+  testWidgets('协调器互斥：控制中心开着点 wifi 格 → 先关控制中心再开 wifi 面板', (tester) async {
     await tester.pumpWidget(
       _wrapTray(
         services: _FakeShellServices(),
@@ -1235,9 +1301,7 @@ void main() {
     expect(tester.takeException(), isNull);
   });
 
-  testWidgets('专辑图：`file://` 剥成路径喂 imageBytes；http(s) 走占位（B2）', (
-    tester,
-  ) async {
+  testWidgets('专辑图：`file://` 剥成路径喂 imageBytes；http(s) 走占位（B2）', (tester) async {
     final bridge = _FakeBridge();
     final services = _FakeShellServices(
       media: playingMedia(artUrl: 'file:///tmp/cover.png'),
