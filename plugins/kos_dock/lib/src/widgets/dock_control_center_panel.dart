@@ -38,6 +38,7 @@ import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/state.dart';
 import 'package:denial_flutter_sdk/surfaces.dart' show DisplayOutput;
 import 'package:denial_flutter_sdk/system_services.dart';
+import 'package:denial_flutter_sdk/tokens.dart' show ShellText;
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -425,7 +426,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
     final offsetY = incoming
         ? kDockControlCenterPageOffset * (1 - progress)
         : 0.0;
-    return Opacity(
+    return DockStatusPanelFade(
       opacity: factor.clamp(0.0, 1.0),
       child: Transform.translate(
         offset: Offset(0, offsetY),
@@ -550,7 +551,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
             label: '显示亮度',
             valueText: brightnessValue == null
                 ? '无亮度设备'
-                : '${brightnessValue.round()}%',
+                : '${brightnessValue.round()}\u00a0%',
             glyph: const Text(
               '☀',
               style: TextStyle(
@@ -612,7 +613,7 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
             hotKey: const ValueKey<String>('cc.volumeHot'),
             sliderKey: const ValueKey<String>('cc.volumeSlider'),
             label: '声音',
-            valueText: '${_volumePreview.round()}%',
+            valueText: '${_volumePreview.round()}\u00a0%',
             glyph: CustomPaint(
               size: const Size.square(kDockControlCenterVolumeGlyphSize),
               painter: DockControlCenterVolumeGlyph(
@@ -859,9 +860,13 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
             top: kDockControlCenterBarLabelTop,
             child: Text(
               valueText,
-              style: TextStyle(
-                // KOS: :1158 — 9px @0.50 / :1240 — 10px @0.72。
-                fontSize: valueSize,
+              style: ShellText.systemBarValue.copyWith(
+                // Use the official shell's bundled numeric face. At fractional
+                // display scale the old 9/10px values have too few pixels for
+                // their thin stems; keep at least the shell caption's 11px.
+                fontSize: math.max(valueSize, 11),
+                fontWeight: FontWeight.w400,
+                letterSpacing: 0,
                 color: colors.textPrimary.withValues(alpha: valueAlpha),
                 height: 1.0,
               ),
@@ -1850,7 +1855,7 @@ class _DockControlCenterPillState extends State<DockControlCenterPill>
         scale: cardScale,
         duration: kDockControlCenterCellDuration,
         curve: Curves.easeOutCubic,
-        child: Opacity(
+        child: DockStatusPanelFade(
           // KOS: :673 — `!bluetoothAvailable → cardOpacity .48`。
           opacity: widget.available
               ? 1.0

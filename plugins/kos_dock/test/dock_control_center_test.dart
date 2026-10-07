@@ -576,13 +576,13 @@ double _reveal(WidgetTester tester) => tester
     )
     .opacity;
 
-/// 指定 widget（key）最近祖先 `Opacity` 的透明度（页 crossfade 进度）。
+/// 页 crossfade 进度由各表面独立消费，不再把玻璃放进整页 Opacity。
 double _revealOf(WidgetTester tester, String key) => tester
-    .widget<Opacity>(
+    .widget<DockStatusPanelFade>(
       find
           .ancestor(
             of: find.byKey(ValueKey<String>(key)),
-            matching: find.byType(Opacity),
+            matching: find.byType(DockStatusPanelFade),
           )
           .first,
     )
@@ -1028,17 +1028,17 @@ void main() {
       0.5,
     );
     expect(bridge.appliedVolumes, [50]);
-    expect(find.text('50%'), findsOneWidget);
+    expect(find.text('50\u00a0%'), findsOneWidget);
     // 自身回写（serial 命中最近一次 apply）→ 跳过，不被拉回。
     bridge.emitAudioLevel(const AudioLevelState(level: 0.1, requestSerial: 1));
     await tester.pump();
     await tester.pump();
-    expect(find.text('50%'), findsOneWidget);
+    expect(find.text('50\u00a0%'), findsOneWidget);
     // 外部改动（serial 不同）→ 回灌。
     bridge.emitAudioLevel(const AudioLevelState(level: 0.1, requestSerial: 2));
     await tester.pump();
     await tester.pump();
-    expect(find.text('10%'), findsOneWidget);
+    expect(find.text('10\u00a0%'), findsOneWidget);
   });
 
   testWidgets('声音子页周期刷新：1.8s 重发应用流 + 服务值回灌（N4）', (tester) async {

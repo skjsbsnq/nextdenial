@@ -1627,7 +1627,8 @@ const double kDockControlCenterBrightnessHotZone = 27;
 const double kDockControlCenterSoundHotZone = 26;
 const double kDockControlCenterSoundValueSize = 10;
 const double kDockControlCenterSoundValueAlpha = 0.72;
-const double kDockControlCenterSoundValueRight = 14;
+// Both level bars reserve the same space between their value and chevron.
+const double kDockControlCenterSoundValueRight = kDockControlCenterBarValueRight;
 const double kDockControlCenterBrightnessSliderLeft = 31;
 const double kDockControlCenterBrightnessSliderRight = 31;
 const double kDockControlCenterVolumeSliderLeft = 34;

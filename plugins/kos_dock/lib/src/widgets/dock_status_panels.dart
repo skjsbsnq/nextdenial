@@ -26,7 +26,8 @@ library;
 import 'dart:async';
 import 'dart:math' as math;
 
-import 'package:denial_flutter_sdk/effects.dart' show ShellBackdropBlur;
+import 'package:denial_flutter_sdk/glass_configuration.dart'
+    show ShellTransparencyMode;
 import 'package:denial_flutter_sdk/input.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:denial_flutter_sdk/surfaces.dart'
@@ -35,6 +36,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme/dock_tokens.dart';
+import 'dock_backdrop_blur.dart';
 import 'dock_preview_popup.dart';
 
 /// 面板内容的 Esc 分步钩子（KOS `bar/ControlCenterPanel.qml:512-524`：确认框、
@@ -354,7 +356,8 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
   }
 }
 
-/// 状态面板玻璃表面：`ShellBackdropBlur` + panelGradient + hairlineSoft 边
+/// 状态面板玻璃表面：`ShellBackdropBlur` + panelGradient。
+/// 普通模糊保留 hairline；glass 按官方 quick-settings tile 使用材质亮边。
 /// （`_DockPreviewPanel`/`DockMenuPanel` 同式近似 KOS `LiquidGlassPanel`）。
 ///
 /// 前景（渐变+边框+内容）按 `DockStatusPanelOpenScope.revealOf` 淡入；
@@ -378,10 +381,13 @@ class DockStatusPanelSurface extends StatelessWidget {
     // reveal 来自 DockStatusPanelAnchor 的 overlay scope；无祖先 → 1（独立
     // 挂载/测试默认全展开）。
     final reveal = DockStatusPanelOpenScope.revealOf(context);
-    return ShellBackdropBlur(
+    final materialOpacity = _DockStatusPanelFadeScope.of(context);
+    return DockBackdropBlur(
       blur: theme.backdropBlurEnabled,
-      separateChild: true,
       borderRadius: radius,
+      opacity: materialOpacity < 1
+          ? AlwaysStoppedAnimation(materialOpacity)
+          : null,
       child: Opacity(
         opacity: reveal,
         child: DecoratedBox(
@@ -391,13 +397,54 @@ class DockStatusPanelSurface extends StatelessWidget {
               colors.panelBackground,
               colors.panelBackgroundBottom,
             ),
-            border: Border.all(color: colors.hairlineSoft),
+            // Match the official quick-settings tile: glass already draws its
+            // rounded rim. A second stroke adds another blended edge over it.
+            border: theme.transparencyMode == ShellTransparencyMode.glass
+                ? null
+                : Border.all(color: colors.hairlineSoft),
           ),
           child: ClipRRect(borderRadius: radius, child: child),
         ),
       ),
     );
   }
+}
+
+/// Fade each glass replacement separately from its foreground controls.
+/// An outer Opacity would flatten all cards, their backdrop filters and text
+/// into one intermediate image (contrary to ShellBackdropBlur's contract).
+class DockStatusPanelFade extends StatelessWidget {
+  const DockStatusPanelFade({
+    required this.opacity,
+    required this.child,
+    super.key,
+  });
+
+  final double opacity;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) => _DockStatusPanelFadeScope(
+    opacity: opacity.clamp(0.0, 1.0) * _DockStatusPanelFadeScope.of(context),
+    child: child,
+  );
+}
+
+class _DockStatusPanelFadeScope extends InheritedWidget {
+  const _DockStatusPanelFadeScope({
+    required this.opacity,
+    required super.child,
+  });
+
+  final double opacity;
+
+  static double of(BuildContext context) => context
+      .dependOnInheritedWidgetOfExactType<_DockStatusPanelFadeScope>()
+      ?.opacity ?? 1.0;
+
+  @override
+  bool updateShouldNotify(_DockStatusPanelFadeScope oldWidget) =>
+      opacity != oldWidget.opacity;
 }
 
 /// 面板底脚（「无线局域网设置…」/「蓝牙设置…」）：50px 高、顶部 1px 分隔、

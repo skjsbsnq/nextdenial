@@ -54,7 +54,8 @@
 /// 新打开者立即收掉前一个。
 library;
 
-import 'package:denial_flutter_sdk/effects.dart' show ShellBackdropBlur;
+import 'package:denial_flutter_sdk/glass_configuration.dart'
+    show ShellTransparencyMode;
 import 'package:denial_flutter_sdk/input.dart' show ShellInputRegion;
 import 'package:denial_flutter_sdk/services.dart' show ShellServices;
 import 'package:denial_flutter_sdk/shell_theme.dart'
@@ -72,6 +73,7 @@ import 'dart:math' as math;
 import '../state/dock_row_entries.dart';
 import '../state/dock_settings.dart';
 import '../theme/dock_tokens.dart';
+import 'dock_backdrop_blur.dart';
 import 'dock_divider.dart';
 import 'dock_icons.dart';
 import 'dock_preview_popup.dart';
@@ -503,11 +505,10 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
                   // 子树尺寸走——它的子树里只放 tight dockHeight 的 pill 本
                   // 体，图标带层移出 ClipRRect（溢出通路不再经过裁剪，与
                   // quickshell `glass` 恒定高、band 独立层同构）。
-                  ShellBackdropBlur(
+                  DockBackdropBlur(
                     blur: theme.backdropBlurEnabled,
                     // 前景不进 filter 层：glass 模式的 refraction/edge 光效
                     // 不污染内容。
-                    separateChild: true,
                     opacity: opacity,
                     borderRadius: borderRadius,
                     child: ShellInputRegion(
@@ -534,7 +535,11 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
                             // KOS: dock/DockDivider.qml:16 — divider 色走
                             // 语义 hairline，不在此硬编码；hairline 边线给
                             // 玻璃一个收敛边缘。
-                            border: Border.all(color: colors.hairlineSoft),
+                            // Match Denial's glass tiles: the material owns
+                            // its edge; another hairline doubles the contour.
+                            border: theme.transparencyMode == ShellTransparencyMode.glass
+                                ? null
+                                : Border.all(color: colors.hairlineSoft),
                           ),
                           child: MouseRegion(
                             key: _pointerRegionKey,
