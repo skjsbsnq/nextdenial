@@ -64,6 +64,7 @@ Future<DockMetricsProcessResult> _defaultRunProcess(
 final class ProcfsDockMetricsCollector implements DockMetricsCollector {
   ProcfsDockMetricsCollector({
     this.interval = defaultInterval,
+    this.diskRefreshInterval = const Duration(minutes: 1),
     DockMetricsReadFile? readFile,
     DockMetricsListDirectory? listDirectory,
     DockMetricsRunProcess? runProcess,
@@ -79,6 +80,11 @@ final class ProcfsDockMetricsCollector implements DockMetricsCollector {
 
   /// 采样周期（对齐 MetricsService.qml:44）。
   final Duration interval;
+
+  /// Disk usage can lag by up to this duration; CPU sampling stays unchanged.
+  final Duration diskRefreshInterval;
+  (double, double)? _diskCache;
+  DateTime? _diskSampledAt;
 
   /// 默认采样周期 10s（MetricsService.qml:44 / deskcenter
   /// system_metrics_collector.dart:116）。
@@ -221,6 +227,13 @@ final class ProcfsDockMetricsCollector implements DockMetricsCollector {
   /// 数据行取最后一行；长设备名换行时统计行只有 5 字段（total 起自
   /// fields[0]），正常行 ≥6 字段（total/used 为 fields[1]/[2]）。
   Future<(double, double)> _readDisk() async {
+    final cached = _diskCache;
+    final sampledAt = _diskSampledAt;
+    final now = _now();
+    if (cached != null && sampledAt != null &&
+        now.isBefore(sampledAt.add(diskRefreshInterval))) {
+      return cached;
+    }
     try {
       final result = await _runProcess('df', const ['-B1', '/']);
       if (result.exitCode != 0) return (0.0, 0.0);
@@ -235,7 +248,8 @@ final class ProcfsDockMetricsCollector implements DockMetricsCollector {
       final total = double.tryParse(fields[totalIndex]) ?? 0;
       final used = double.tryParse(fields[totalIndex + 1]) ?? 0;
       if (total <= 0) return (0.0, 0.0);
-      return (used, total);
+      _diskSampledAt = now;
+      return _diskCache = (used, total);
     } on Object {
       return (0.0, 0.0);
     }

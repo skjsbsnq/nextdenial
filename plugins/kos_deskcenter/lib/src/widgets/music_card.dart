@@ -67,6 +67,7 @@ import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import '../layout/widget_layout.dart' show WidgetSize;
 import 'calendar_card.dart' show KosLaunchAppCallback;
 import 'desk_card.dart';
+import 'artwork_image.dart';
 
 /// 音乐卡内容色板（`content.ink`/`colors.*` 角色解析注入）。
 /// TASK-09 起 `onBackdrop`/`isMaterial` 分叉改为按 `context.shellTheme`
@@ -277,15 +278,18 @@ class _KosMusicCardState extends ConsumerState<KosMusicCard>
       if (provider != null) cover = ref.watch(provider).value;
     }
 
-    // WavyProgress 相位与播放位置刷新：播放中运行双动画（:1735-1740 的
-    // 250ms 位置轮询由帧驱动的 AnimatedBuilder 覆盖，更平滑且省电
-    // 近似——停止时停走）。
-    if (playing) {
+    // Tick only the effects that are actually visible. Painting is isolated
+    // from the card's backdrop, so music does not repaint the glass every frame.
+    final animate = playing && !MediaQuery.disableAnimationsOf(context);
+    if (animate && colors.isMaterial && safeLength != null) {
       if (!_wavyPhase.isAnimating) _wavyPhase.repeat();
+    } else {
+      _wavyPhase.stop();
+    }
+    if (animate) {
       if (!_notesClock.isAnimating) _notesClock.repeat();
     } else {
-      if (_wavyPhase.isAnimating) _wavyPhase.stop();
-      if (_notesClock.isAnimating) _notesClock.stop();
+      _notesClock.stop();
     }
     return DeskCard(
       size: widget.size,
@@ -315,9 +319,11 @@ class _KosMusicCardState extends ConsumerState<KosMusicCard>
                 width: 72, // :1763
                 height: 62, // :1764
                 child: ClipRect(
-                  child: _MusicNotes(
-                    controller: _notesClock,
-                    color: colors.noteInk,
+                  child: RepaintBoundary(
+                    child: _MusicNotes(
+                      controller: _notesClock,
+                      color: colors.noteInk,
+                    ),
                   ),
                 ),
               ),
@@ -527,15 +533,7 @@ class _Cover extends StatelessWidget {
             colorFilter: _grayscale,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(radius),
-              child: Image.memory(
-                bytes!,
-                fit: BoxFit.cover,
-                width: side,
-                height: side,
-                gaplessPlayback: true,
-                // MPRIS 封面原图远大于卡内缩略框：medium 双线性降采样。
-                filterQuality: FilterQuality.medium,
-              ),
+              child: ArtworkImage(bytes: bytes!, extent: side),
             ),
           );
           content = image;
@@ -893,12 +891,11 @@ class _WavyProgress extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: phase,
-      builder: (context, child) => CustomPaint(
+    return RepaintBoundary(
+      child: CustomPaint(
         painter: _WavyProgressPainter(
           value: value,
-          phase: phase.value * math.pi * 2, // WavyProgress.qml:24 0→2π
+          phase: phase,
           activeColor: activeColor,
           trackColor: trackColor,
           amplitude: amplitude,
@@ -911,7 +908,7 @@ class _WavyProgress extends StatelessWidget {
 }
 
 class _WavyProgressPainter extends CustomPainter {
-  const _WavyProgressPainter({
+  _WavyProgressPainter({
     required this.value,
     required this.phase,
     required this.activeColor,
@@ -919,10 +916,10 @@ class _WavyProgressPainter extends CustomPainter {
     required this.amplitude,
     required this.wavelength,
     required this.lineWidth,
-  });
+  }) : super(repaint: phase);
 
   final double value;
-  final double phase;
+  final Animation<double> phase;
   final Color activeColor;
   final Color trackColor;
   final double amplitude;
@@ -952,7 +949,7 @@ class _WavyProgressPainter extends CustomPainter {
       final envelope = math.min(1, math.min(x / 5, (progressX - x) / 5)); // :47
       final y =
           centerY +
-          math.sin(x / wavelength * math.pi * 2 + phase) *
+          math.sin(x / wavelength * math.pi * 2 + phase.value * math.pi * 2) *
               amplitude *
               math.max(0, envelope); // :48-49
       if (x == 0) {

@@ -47,6 +47,7 @@ import 'dock_bluetooth_panel.dart';
 import 'dock_status_panels.dart';
 import 'dock_wifi_panel.dart';
 import 'media_art.dart';
+import 'artwork_image.dart';
 import 'status_cells.dart';
 
 /// 子页卡高（纯函数，可测）：KOS `ControlCenterPanel.qml:1857-1860`。
@@ -810,13 +811,9 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
                 height: kDockControlCenterMediaArtSize,
                 color: colors.tileOff,
                 child: switch (artBytes.value) {
-                  final Uint8List bytes? when bytes.isNotEmpty => Image.memory(
-                    bytes,
-                    fit: BoxFit.cover,
-                    gaplessPlayback: true,
-                    // 媒体封面原图远大于 kDockControlCenterMediaArtSize
-                    // 缩略框：medium 双线性降采样消边缘锯齿。
-                    filterQuality: FilterQuality.medium,
+                  final Uint8List bytes? when bytes.isNotEmpty => ArtworkImage(
+                    bytes: bytes,
+                    extent: kDockControlCenterMediaArtSize,
                   ),
                   _ => placeholder,
                 },

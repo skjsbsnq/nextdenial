@@ -11,6 +11,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'dock_weather.dart';
 
@@ -79,36 +80,33 @@ Uri dockWeatherForecastUrl(DockWeatherLocation location) {
 ///
 /// Accept/User-Agent + 2MiB body cap per weather.go:216-218,29.
 Future<Map<String, Object?>> _defaultHttpGet(Uri uri) async {
-  final client = HttpClient();
+  final client = HttpClient()..connectionTimeout = kDockWeatherRequestTimeout;
   try {
-    final request = await client.getUrl(uri);
-    request.headers.set('Accept', 'application/json');
-    request.headers.set(
-      'User-Agent',
-      'Denial/kos_dock (+https://open-meteo.com)',
-    );
-    final response = await request.close();
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      await response.drain<void>();
-      throw HttpException(
-        'weather provider returned HTTP ${response.statusCode}',
-        uri: uri,
-      );
-    }
-    final body = await response.fold<List<int>>(<int>[], (buffer, chunk) {
-      buffer.addAll(chunk);
-      if (buffer.length > 2 << 20) {
-        throw const HttpException('weather response too large');
+    return await (() async {
+      final request = await client.getUrl(uri);
+      request.headers.set('Accept', 'application/json');
+      request.headers.set('User-Agent', 'Denial/kos_dock (+https://open-meteo.com)');
+      final response = await request.close();
+      if (response.statusCode < 200 || response.statusCode >= 300) {
+        throw HttpException('weather provider returned HTTP ${response.statusCode}', uri: uri);
       }
-      return buffer;
-    });
-    final decoded = jsonDecode(utf8.decode(body));
-    if (decoded is Map) {
-      return decoded.map((k, v) => MapEntry(k.toString(), v));
-    }
-    throw const FormatException('weather response is not a JSON object');
+      // Preserve typed byte chunks instead of expanding them into int lists.
+      final body = BytesBuilder(copy: false);
+      await for (final chunk in response) {
+        if (body.length + chunk.length > 2 << 20) {
+          throw const HttpException('weather response too large');
+        }
+        body.add(chunk);
+      }
+      final decoded = jsonDecode(utf8.decode(body.takeBytes()));
+      if (decoded is Map) {
+        return decoded.map((k, v) => MapEntry(k.toString(), v));
+      }
+      throw const FormatException('weather response is not a JSON object');
+    })().timeout(kDockWeatherRequestTimeout);
   } finally {
-    client.close();
+    // A Future.timeout alone doesn't abort a hung request or release its socket.
+    client.close(force: true);
   }
 }
 
@@ -267,11 +265,18 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
   /// Restores persisted location + cached snapshot, emits loading, fetches
   /// the first forecast, and starts the 1-minute heartbeat that drives the
   /// refresh/backoff schedule (weather.go main-loop equivalent). Idempotent.
+  Future<void>? _starting;
+
   @override
-  Future<void> start() async {
-    if (_disposed) return;
+  Future<void> start() {
+    if (_disposed) return Future.value();
+    return _starting ??= _start();
+  }
+
+  Future<void> _start() async {
     if (_latest == null || _latest!.status != 'ready') {
       _location = await _loadLocation();
+      if (_disposed) return;
       // Publish restored data to existing subscribers before the network fetch.
       if (_latest?.status == 'ready') _emit(_latest!);
       if (_latest == null) {
@@ -279,6 +284,7 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
       }
       await refresh();
     }
+    if (_disposed) return;
     _timer ??= Timer.periodic(const Duration(minutes: 1), (_) {
       if (_disposed || _fetching) return;
       if (_nextRefreshAt != null && _now().isBefore(_nextRefreshAt!)) return;
@@ -297,6 +303,7 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
     try {
       final payload = await _httpGet(dockWeatherForecastUrl(_location))
           .timeout(requestTimeout);
+      if (_disposed) return _latest;
       _failStreak = 0;
       _fetchedAt = _now();
       _nextRefreshAt = _now().add(refreshInterval); // weather.go:605
@@ -305,6 +312,7 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
       await _persist();
       return snapshot;
     } on Object {
+      if (_disposed) return _latest;
       _failStreak += 1;
       _nextRefreshAt = _now().add(dockWeatherBackoff(_failStreak)); // :591
       if (_latest != null && _latest!.status == 'ready') {

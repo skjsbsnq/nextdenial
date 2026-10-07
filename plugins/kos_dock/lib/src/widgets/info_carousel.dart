@@ -176,7 +176,9 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
       // DockClockWidget.qml:27-30）的等价物：时钟卡 `now` 恒取秒级
       // `_clockNow`；`services.clock` 是分钟级流、对秒字段无价值故不取
       // （记 deltas）。1Hz setState 重绘保留。
-      if (mounted) setState(() => _clockNow = DateTime.now());
+      _clockNow = DateTime.now();
+      // Hidden clock pages need no rebuild; switching pages reads fresh time.
+      if (mounted && (_page == clockPage || _popupVisible)) setState(() {});
     });
   }
 
@@ -724,15 +726,23 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
         ? ref.watch(dockWeatherSnapshotProvider).value
         : null;
     final hasWeather = weather?.available ?? false;
-    final metricsSnapshot = ref.watch(dockMetricsSnapshotProvider).value;
-    final cpuFraction = ref.watch(widget.services.cpu).current;
+    final needsMetrics =
+        prefsAsync.hasValue && prefs.infoCardOrder.contains('metrics');
+    final metricsSnapshot = needsMetrics
+        ? ref.watch(dockMetricsSnapshotProvider).value
+        : null;
+    final cpuFraction = needsMetrics
+        ? ref.watch(widget.services.cpu.select((series) => series.current))
+        : null;
     final mediaCommands = ref.watch(widget.services.mediaCommands);
     final monitorBounds = ref.watch(
       widget.services.monitorBounds(widget.monitorId),
     );
     // 封面：artUrl → 本地路径（`file:` 剥前缀；http(s)/空/其它 scheme →
     // null，本端不抓网络图，记 deltas）经 `imageBytes`。
-    final artPath = dockLocalArtPath(media.artUrl);
+    final artPath = prefsAsync.hasValue && hasMusic
+        ? dockLocalArtPath(media.artUrl)
+        : null;
     final artwork = artPath == null
         ? null
         : ref.watch(widget.services.imageBytes(artPath)).value;
@@ -892,7 +902,7 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
 /// 单卡滑动容器：x 260ms OutCubic + opacity 220ms OutCubic
 /// （DockInfoCarousel.qml:332-333 等 `Behavior on x/opacity`）。
 /// 非当前页 IgnorePointer——隐藏页不吃 hover/点击。
-class _SlidingCard extends StatelessWidget {
+class _SlidingCard extends StatefulWidget {
   const _SlidingCard({
     required this.x,
     required this.shown,
@@ -906,24 +916,42 @@ class _SlidingCard extends StatelessWidget {
   final Widget child;
 
   @override
+  State<_SlidingCard> createState() => _SlidingCardState();
+}
+
+class _SlidingCardState extends State<_SlidingCard> {
+  late bool _keepContent = widget.shown;
+
+  @override
+  void didUpdateWidget(_SlidingCard oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.shown) _keepContent = true;
+  }
+
+  @override
   Widget build(BuildContext context) {
     return TweenAnimationBuilder<double>(
       // KOS `Behavior on x`（:332 260ms OutCubic）：`Tween(end:)` 隐式动画
       // 模式——x 变化时从上值滑到新值（begin null → 首帧直接落位不播入）。
-      tween: Tween(end: x),
+      tween: Tween(end: widget.x),
       duration: kDockInfoPageSlideDuration,
       curve: Curves.easeOutCubic,
       builder: (context, dx, child) => Transform.translate(
         offset: Offset(dx, 0),
         child: AnimatedOpacity(
           // KOS `Behavior on opacity`（:333 220ms OutCubic）。
-          opacity: shown ? 1 : 0,
+          opacity: widget.shown ? 1 : 0,
+          onEnd: () {
+            if (!widget.shown && mounted) {
+              setState(() => _keepContent = false);
+            }
+          },
           duration: kDockInfoPageFadeDuration,
           curve: Curves.easeOutCubic,
-          child: IgnorePointer(ignoring: !shown, child: child),
+          child: IgnorePointer(ignoring: !widget.shown, child: child),
         ),
       ),
-      child: child,
+      child: _keepContent ? widget.child : const SizedBox.shrink(),
     );
   }
 }

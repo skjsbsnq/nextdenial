@@ -221,7 +221,9 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     // （`info_carousel.dart` build）用**同一表达式**，避免「shell 判
     // hasInfo=true 而 carousel 认为 music 不可用」的两侧漂移。
     final mediaAvailable = prefs.infoCardOrder.contains('music')
-        ? ref.watch(widget.services.media).value?.available ?? false
+        ? ref.watch(widget.services.media.select(
+            (state) => state.value?.available ?? false,
+          ))
         : false;
     // weather 快照流**只在门控打开时才订阅**：门控 = 偏好已真正读到
     // （`prefsAsync.hasValue`）**且** order 需要天气数据——
@@ -266,7 +268,7 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     // 隐藏）→ `dockTrayEstimateWidth`。只有 trayAccessory 挂载时才订阅这些
     // provider（托盘源 tick 不应重建无托盘的 pill）。
     final trayIdCount = trayAccessory != null
-        ? ref.watch(widget.services.trayItemIds).length
+        ? ref.watch(widget.services.trayItemIds.select((ids) => ids.length))
         : 0;
     // 状态格计数与 `DockTrayAccessory` 内同源（KOS `trailingCells`，
     // BarStatusArea.qml:28-33 = network/battery/settings/controlcenter；
@@ -275,10 +277,14 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
     // `capacity != null`、controlcenter（TASK-09）**恒显示 +1**。
     final statusCellCount = trayAccessory == null
         ? 0
-        : (ref.watch(networkConnectivityProvider).snapshot.wifiDeviceAvailable
+        : (ref.watch(networkConnectivityProvider.select(
+                  (state) => state.snapshot.wifiDeviceAvailable,
+                ))
                   ? 1
                   : 0) +
-              (ref.watch(widget.services.battery).capacity != null ? 1 : 0) +
+              (ref.watch(widget.services.battery.select(
+                  (battery) => battery.capacity != null,
+                )) ? 1 : 0) +
               1;
     final trayItemCount = trayIdCount + statusCellCount;
     // chicken-and-egg：折行判定的 availableHeight=dockHeight 依赖反解后的
@@ -445,8 +451,34 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
         runningCount: runningCount,
       ),
     );
+    // Width changes only update geometry. Reuse the icon subtree so the
+    // layout-width feedback doesn't rebuild every icon a second time.
+    final iconRow = DockIconRow(
+      monitorId: widget.monitorId,
+      services: widget.services,
+      coordinator: _popups,
+      layoutWidth: _iconRowLayoutWidth,
+      leading: [
+        if (showLauncher)
+          LauncherIcon(
+            key: const ValueKey<String>(
+              'dock.launcher',
+            ),
+            services: widget.services,
+            coordinator: _popups,
+          ),
+        if (showTrash)
+          TrashIcon(
+            key: const ValueKey<String>('dock.trash'),
+            services: widget.services,
+            monitorId: widget.monitorId,
+            coordinator: _popups,
+          ),
+      ],
+    );
     return AnimatedBuilder(
       animation: _iconRowLayoutWidth,
+      child: iconRow,
       builder: (context, child) {
         // Σspan 恒 ≥ resting（scale ≥ 1）；行首帧未上报（值 0）时退化为
         // 静止宽。行消失/条目骤减后上报滞后一帧 → max 取法保证不欠宽
@@ -666,29 +698,7 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
                           // ——图标带外扩始终留在 pill 内，不遮相邻槽位。
                           width: iconRowWidth,
                           height: metrics.dockHeight + iconRowHeadroom,
-                          child: DockIconRow(
-                            monitorId: widget.monitorId,
-                            services: widget.services,
-                            coordinator: _popups,
-                            layoutWidth: _iconRowLayoutWidth,
-                            leading: [
-                              if (showLauncher)
-                                LauncherIcon(
-                                  key: const ValueKey<String>(
-                                    'dock.launcher',
-                                  ),
-                                  services: widget.services,
-                                  coordinator: _popups,
-                                ),
-                              if (showTrash)
-                                TrashIcon(
-                                  key: const ValueKey<String>('dock.trash'),
-                                  services: widget.services,
-                                  monitorId: widget.monitorId,
-                                  coordinator: _popups,
-                                ),
-                            ],
-                          ),
+                          child: child,
                         ),
                       ),
                     ),

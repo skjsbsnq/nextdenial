@@ -34,6 +34,7 @@ import 'package:denial_flutter_sdk/shell_theme.dart'
 import 'package:denial_sdk/system.dart' show MprisPlaybackState;
 import 'package:flutter/material.dart';
 
+import '../artwork_image.dart';
 import '../../theme/dock_tokens.dart';
 
 /// 把 marquee 控制器的 0..1 进度映射为「位移系数」：首段停 0 → 线性段
@@ -47,18 +48,12 @@ TweenSequence<double> _marqueeSequence({
 }) {
   final total = pauseStartMs + scrollMs + pauseEndMs;
   return TweenSequence<double>([
-    TweenSequenceItem(
-      tween: ConstantTween(0.0),
-      weight: pauseStartMs / total,
-    ),
+    TweenSequenceItem(tween: ConstantTween(0.0), weight: pauseStartMs / total),
     TweenSequenceItem(
       tween: Tween(begin: 0.0, end: 1.0),
       weight: scrollMs / total,
     ),
-    TweenSequenceItem(
-      tween: ConstantTween(1.0),
-      weight: pauseEndMs / total,
-    ),
+    TweenSequenceItem(tween: ConstantTween(1.0), weight: pauseEndMs / total),
   ]);
 }
 
@@ -215,12 +210,7 @@ class _AlbumArt extends StatelessWidget {
           fit: StackFit.expand,
           children: [
             if (art != null)
-              Image.memory(
-                art,
-                fit: BoxFit.cover, // KOS: :190 PreserveAspectCrop
-                gaplessPlayback: true,
-                filterQuality: FilterQuality.medium,
-              )
+              ArtworkImage(bytes: art, extent: size)
             else
               ColoredBox(
                 // KOS: :171 `color: ThemeService.dividerColor` → hairlineSoft
@@ -516,9 +506,7 @@ class _DockControlButton extends StatelessWidget {
             alpha: enabled ? (primary ? 0.20 : 0.12) : 0.06,
           ),
           border: Border.all(
-            color: colors.textPrimary.withValues(
-              alpha: enabled ? 0.25 : 0.10,
-            ),
+            color: colors.textPrimary.withValues(alpha: enabled ? 0.25 : 0.10),
           ),
         ),
         child: Icon(

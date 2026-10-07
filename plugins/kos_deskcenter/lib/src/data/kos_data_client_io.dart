@@ -106,7 +106,7 @@ final class SocketKosDataClient implements KosDataClient {
 
   @override
   Future<void> connect() async {
-    if (_disposed) return;
+    if (_disposed || _available) return;
     _reconnectTimer?.cancel();
     _reconnectTimer = null;
     await _openSocket();
@@ -121,6 +121,10 @@ final class SocketKosDataClient implements KosDataClient {
         InternetAddress(_socketPath, type: InternetAddressType.unix),
         0,
       );
+      if (_disposed) {
+        socket.destroy();
+        return;
+      }
       _attach(socket);
     } on Object {
       _available = false;

@@ -93,8 +93,10 @@ class _FakeMetricsCollector implements DockMetricsCollector {
       ? const Stream<DockMetricsSnapshot>.empty()
       : Stream.value(_latest);
 
+  int starts = 0;
+
   @override
-  void start() {}
+  void start() {starts++;}
 
   @override
   Future<DockMetricsSnapshot?> sample() async => _latest;
@@ -368,6 +370,7 @@ Widget _wrapCarousel({
   DockPopupCoordinator? coordinator,
   DockPreferencesStore? store,
   DockMetrics? scopeMetrics,
+  DockMetricsCollector? collector,
 }) => ProviderScope(
   overrides: [
     dockPreferencesStoreProvider.overrideWithValue(
@@ -377,7 +380,7 @@ Widget _wrapCarousel({
       _FakeWeatherProvider(weather),
     ),
     dockMetricsCollectorProvider.overrideWithValue(
-      _FakeMetricsCollector(metrics),
+      collector ?? _FakeMetricsCollector(metrics),
     ),
   ],
   child: MaterialApp(
@@ -503,6 +506,39 @@ Notifier<MprisPlaybackState> _mediaNotifier(WidgetTester tester) =>
 // ── tests ───────────────────────────────────────────────────────────────
 
 void main() {
+  group('performance resource lifetime', () {
+    testWidgets('inactive pages release their widget trees after fading', (tester) async {
+      final services = _FakeShellServices(mediaState: _playingState());
+      await tester.pumpWidget(_wrapCarousel(
+        services: services,
+        prefs: _prefs(),
+        weather: _readyWeather,
+        metrics: _metricsSnapshot,
+      ));
+      await _settle(tester);
+      expect(find.byType(DockClockCard), findsOneWidget);
+      expect(find.byType(DockMusicCard), findsNothing);
+      expect(find.byType(DockMetricsCard), findsNothing);
+      await _wheel(tester, 24);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      expect(find.byType(DockClockCard), findsNothing);
+      expect(find.byType(DockMetricsCard), findsOneWidget);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+    testWidgets('a clock-only carousel does not start the metrics collector', (tester) async {
+      final collector = _FakeMetricsCollector(_metricsSnapshot);
+      await tester.pumpWidget(_wrapCarousel(
+        services: _FakeShellServices(),
+        prefs: _prefs(['clock']),
+        weather: _readyWeather,
+        collector: collector,
+      ));
+      await _settle(tester);
+      expect(collector.starts, 0);
+      await tester.pumpWidget(const SizedBox.shrink());
+    });
+  });
   group('carousel 成页（infoCardOrder × cardVisible）', () {
     testWidgets('media/weather 均可用 → 4 页全成页', (tester) async {
       final services = _FakeShellServices(mediaState: _playingState());

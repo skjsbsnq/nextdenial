@@ -302,6 +302,7 @@ final class PimStore {
   List<IcalTodo> get rawTodos => List.unmodifiable(_todos);
 
   bool _disposed = false;
+  bool _disposing = false;
 
   // ---------- 加载 ----------
 
@@ -311,9 +312,12 @@ final class PimStore {
   /// `inbox` 缺失 → 补到首位；calendar.ics 缺失 → 空日历可写；
   /// 解析失败 → `writable=false`、保留既有内存模型不落盘。
   Future<void> load() async {
-    _loaded = true;
+    if (_disposed || _disposing) return;
     await _loadMetadata();
+    if (_disposed || _disposing) return;
     await _loadCalendar();
+    if (_disposed || _disposing) return;
+    _loaded = true;
     _startWatch();
     _startSnapshotTimer();
     // 对齐构造后 `singleShot(0, writeWidgetSnapshot)`（:621）：启动即产出。
@@ -1465,6 +1469,12 @@ final class PimStore {
   /// （对齐 `~Private` 强制 `flushSave` + 快照刷新，
   /// PimStore.cpp:474-479,630-635,637-645）。
   Future<void> dispose() async {
+    if (_disposed || _disposing) return;
+    _disposing = true;
+    _saveTimer?.cancel();
+    _snapshotTimer?.cancel();
+    _reloadDebounce?.cancel();
+    unawaited(_watch?.cancel());
     // flush 再置 disposed：防抖内的 mutation 连同 widget 快照一起
     // 落盘（复审 #4；writeWidgetSnapshot 的 _disposed 早退要求次序）。
     try {

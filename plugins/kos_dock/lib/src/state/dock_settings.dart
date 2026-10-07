@@ -37,6 +37,7 @@ final trashServiceProvider = Provider<TrashService>((_) => FileTrashService());
 /// 垃圾桶状态流：订阅即 `watch()`（先 emit 当前状态，随后变化重发）。
 final trashStateProvider = StreamProvider<TrashState>(
   (ref) => ref.watch(trashServiceProvider).watch(),
+  isAutoDispose: true,
 );
 
 /// 天气数据 provider 注入点：生产为 Open-Meteo + 状态文件实现；测试
@@ -66,7 +67,7 @@ final dockMetricsCollectorProvider = Provider<DockMetricsCollector>((ref) {
   final collector = ProcfsDockMetricsCollector();
   ref.onDispose(collector.dispose);
   return collector;
-});
+}, isAutoDispose: true);
 
 /// 天气快照流（订阅即 `start()`）。
 final dockWeatherSnapshotProvider = StreamProvider<DockWeatherSnapshot>((ref) {
@@ -80,7 +81,7 @@ final dockMetricsSnapshotProvider = StreamProvider<DockMetricsSnapshot>((ref) {
   final collector = ref.watch(dockMetricsCollectorProvider);
   collector.start();
   return collector.snapshots;
-});
+}, isAutoDispose: true);
 
 final dockPreferencesProvider =
     AsyncNotifierProvider<DockPreferencesController, DockPreferences>(

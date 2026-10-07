@@ -43,6 +43,7 @@ import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 
 import 'desk_panel_shell.dart';
 import 'music_card.dart' show KosMusicCardColors;
+import 'artwork_image.dart';
 
 /// `DeskPanelBuilder` 形态的音乐面板入口。
 Widget buildMusicPanel(DeskPanelRequest request, DeskPanelData data) =>
@@ -376,13 +377,7 @@ class _PanelCover extends StatelessWidget {
       ),
       clipBehavior: Clip.antiAlias,
       child: hasPlayer && bytes != null
-          ? Image.memory(
-              bytes!,
-              fit: BoxFit.cover,
-              gaplessPlayback: true,
-              // MPRIS 封面原图远大于面板缩略框：medium 双线性降采样。
-              filterQuality: FilterQuality.medium,
-            )
+          ? ArtworkImage(bytes: bytes!)
           : LayoutBuilder(
               builder: (context, constraints) => Center(
                 child: Text(

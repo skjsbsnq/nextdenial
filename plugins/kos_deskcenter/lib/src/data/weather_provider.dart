@@ -27,6 +27,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
 import '../widgets/weather_card.dart'
     show WeatherDay, WeatherHourly, WeatherSnapshot;
@@ -309,12 +310,19 @@ final class WeatherProvider {
   /// 恢复位置 → 发 loading → 拉取首份预报并按节奏自动刷新（幂等）。
   /// 首次拉取在返回前完成：调用方 `await start()` 后 [latest] 已含
   /// ready/error 终态（loading 帧仍经 [snapshots] 流先行发出）。
-  Future<void> start() async {
-    if (_disposed) return;
+  Future<void>? _starting;
+
+  Future<void> start() {
+    if (_disposed) return Future.value();
+    return _starting ??= _start();
+  }
+
+  Future<void> _start() async {
     if (_latest == null || _latest!.status != 'ready') {
       // _latest 已有 ready 缓存（_loadLocation 恢复）时跳过 loading 帧，
       // 直接后台 refresh 覆盖——重启后先显示旧数据而非「无数据」。
       _location = await _loadLocation();
+      if (_disposed) return;
       // UI 已在 start 前订阅；恢复缓存后立即推送，不等待网络返回。
       if (_latest?.status == 'ready') _emit(_latest!);
       if (_latest == null) {
@@ -328,6 +336,7 @@ final class WeatherProvider {
       }
       await refresh();
     }
+    if (_disposed) return;
     _timer ??= Timer.periodic(const Duration(minutes: 1), (_) {
       // 源端在主循环扫描 nextRefreshAt；本端用 1min 心跳 + 截止时间等价。
       if (_disposed || _fetching) return;
@@ -345,6 +354,7 @@ final class WeatherProvider {
     _fetching = true;
     try {
       final payload = await _fetchForecast(_location);
+      if (_disposed) return _latest;
       _failStreak = 0;
       _fetchedAt = _now();
       _nextRefreshAt = _now().add(refreshInterval); // weather.go:605
@@ -355,6 +365,7 @@ final class WeatherProvider {
       await _persistLocation(_location);
       return snapshot;
     } on Object {
+      if (_disposed) return _latest;
       _failStreak++;
       _nextRefreshAt = _now().add(weatherBackoff(_failStreak)); // :591
       if (_latest != null && _latest!.status == 'ready') {
@@ -521,7 +532,10 @@ final class WeatherProvider {
   /// Open-Meteo 响应 → `WeatherSnapshot`（字段名 snake_case → schema 驼峰；
   /// daily 截断 ≤7，weather.go:367-369 / WeatherService.qml:50；hourly 截断
   /// ≤48，weather.go:330-347 `hourlyCount>48`）。
-  WeatherSnapshot _projectSnapshot(Map<String, Object?> payload, String status) {
+  WeatherSnapshot _projectSnapshot(
+    Map<String, Object?> payload,
+    String status,
+  ) {
     final current = switch (payload['current']) {
       final Map m => m.map((k, v) => MapEntry(k.toString(), v)),
       _ => const <String, Object?>{},
@@ -724,37 +738,33 @@ final class WeatherProvider {
   /// 默认 HTTP GET：dart:io `HttpClient`，Accept/User-Agent 对齐
   /// weather.go:216-218，2MiB 体上限（:29）。
   static Future<Map<String, Object?>> _defaultHttpGet(Uri uri) async {
-    final client = HttpClient();
+    final client = HttpClient()..connectionTimeout = requestTimeout;
     try {
-      final request = await client.getUrl(uri);
-      request.headers.set('Accept', 'application/json');
-      request.headers.set(
-        'User-Agent',
-        'Denial/kos_deskcenter (+https://open-meteo.com)',
-      );
-      final response = await request.close();
-      if (response.statusCode < 200 || response.statusCode >= 300) {
-        await response.drain<void>();
-        throw HttpException(
-          'weather provider returned HTTP ${response.statusCode}',
-          uri: uri,
-        );
-      }
-      final body = await response
-          .fold<List<int>>(<int>[], (buffer, chunk) {
-            buffer.addAll(chunk);
-            if (buffer.length > 2 << 20) {
-              throw const HttpException('weather response too large');
-            }
-            return buffer;
-          });
-      final decoded = jsonDecode(utf8.decode(body));
-      if (decoded is Map) {
-        return decoded.map((k, v) => MapEntry(k.toString(), v));
-      }
-      throw const FormatException('weather response is not a JSON object');
+      return await (() async {
+        final request = await client.getUrl(uri);
+        request.headers.set('Accept', 'application/json');
+        request.headers.set('User-Agent', 'Denial/kos_deskcenter (+https://open-meteo.com)');
+        final response = await request.close();
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          throw HttpException('weather provider returned HTTP ${response.statusCode}', uri: uri);
+        }
+        // Preserve typed byte chunks instead of expanding them into int lists.
+        final body = BytesBuilder(copy: false);
+        await for (final chunk in response) {
+          if (body.length + chunk.length > 2 << 20) {
+            throw const HttpException('weather response too large');
+          }
+          body.add(chunk);
+        }
+        final decoded = jsonDecode(utf8.decode(body.takeBytes()));
+        if (decoded is Map) {
+          return decoded.map((k, v) => MapEntry(k.toString(), v));
+        }
+        throw const FormatException('weather response is not a JSON object');
+      })().timeout(requestTimeout);
     } finally {
-      client.close();
+      // A Future.timeout alone doesn't abort a hung request or release its socket.
+      client.close(force: true);
     }
   }
 }

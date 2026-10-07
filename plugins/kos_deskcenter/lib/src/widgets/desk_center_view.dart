@@ -44,7 +44,6 @@ import 'package:denial_flutter_sdk/shell_theme.dart'
 import 'package:flutter/gestures.dart' show DragStartBehavior;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 
 import '../data/kos_data_client.dart';
 import '../data/system_metrics_collector.dart';
@@ -100,11 +99,10 @@ const Duration _kMetricsPoll = Duration(seconds: 10);
 /// `ProviderListenable<LoadSeries>`，供 `KosSystemCard.cpu` 注入（SDK
 /// `services.cpu` 缺席时的内嵌 CPU 源）。`cpuUpdates` 每次采样推一份
 /// `LoadSeries` 快照；notifier 监听该流并转写为状态。
-ProviderListenable<LoadSeries> _cpuStreamProvider(
-  SystemMetricsCollector collector,
-) => NotifierProvider<_CpuSeriesNotifier, LoadSeries>(
-  () => _CpuSeriesNotifier(collector),
-);
+final _cpuStreamProvider = NotifierProvider.autoDispose
+    .family<_CpuSeriesNotifier, LoadSeries, SystemMetricsCollector>(
+      _CpuSeriesNotifier.new,
+    );
 
 /// 监听 [SystemMetricsCollector.cpuUpdates] 并暴露 `LoadSeries` 状态的
 /// notifier（SDK `services.cpu` 的 `LoadSeries` 型态对齐）。dispose 时
@@ -263,7 +261,9 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
   void didUpdateWidget(KosDeskCenterView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (!identical(widget.dataClient, oldWidget.dataClient) ||
-        !identical(widget.watcher, oldWidget.watcher)) {
+        !identical(widget.watcher, oldWidget.watcher) ||
+        !identical(widget.metricsCollector, oldWidget.metricsCollector) ||
+        !identical(widget.weatherProvider, oldWidget.weatherProvider)) {
       _detachData();
       _attachData();
     }
@@ -418,14 +418,12 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
             .first;
         final activity = result['activity'];
         if (activity is Map && mounted) {
-          setState(
-            () {
-              _activity = ActivitySnapshot.fromJson(
-                activity.map((k, v) => MapEntry(k.toString(), v)),
-              );
-              _activityFromSocket = true;
-            },
-          );
+          setState(() {
+            _activity = ActivitySnapshot.fromJson(
+              activity.map((k, v) => MapEntry(k.toString(), v)),
+            );
+            _activityFromSocket = true;
+          });
           // TASK-18：socket 数据到达后以 socket 为准合并 uptimeByDay——
           // 历史键 socket 覆盖（服务端 journald 跨进程结算更权威），
           // 当日键取 max(socket, tracker 已累计) 不回退插件存活期的
