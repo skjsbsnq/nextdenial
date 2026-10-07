@@ -539,7 +539,7 @@ class _DockIconState extends State<DockIcon> with TickerProviderStateMixin {
 
 /// Matches denial_taskbar: active primary underline, short inactive underline,
 /// and one translucent rear copy for multiple windows.
-class _DockRunningIndicator extends StatelessWidget {
+class _DockRunningIndicator extends StatefulWidget {
   const _DockRunningIndicator({
     required this.running,
     required this.active,
@@ -551,26 +551,51 @@ class _DockRunningIndicator extends StatelessWidget {
   final int windowCount;
 
   @override
-  Widget build(BuildContext context) {
+  State<_DockRunningIndicator> createState() => _DockRunningIndicatorState();
+}
+
+class _DockRunningIndicatorState extends State<_DockRunningIndicator> {
+  /// 由 shell 主题派生的 ColorScheme：参数不变不重算（旧实现每次 build
+  /// 都 `ColorScheme.fromSeed` 新分配；hover/波形帧下本件随父级频繁
+  /// rebuild）。
+  ColorScheme? _scheme;
+  Color? _lastSeed;
+  Brightness? _lastBrightness;
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
     final shell = context.shellTheme;
-    final scheme = ColorScheme.fromSeed(
-      seedColor: shell.accent,
-      brightness: shell.brightness,
-    );
+    // ColorScheme 无值相等：比较输入参数，变了才 fromSeed 换实例。
+    if (_scheme == null ||
+        _lastBrightness != shell.brightness ||
+        _lastSeed != shell.accent) {
+      _lastSeed = shell.accent;
+      _lastBrightness = shell.brightness;
+      _scheme = ColorScheme.fromSeed(
+        seedColor: shell.accent,
+        brightness: shell.brightness,
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = _scheme!;
     final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return AnimatedOpacity(
-      opacity: running ? 1.0 : 0.0,
+      opacity: widget.running ? 1.0 : 0.0,
       duration: reduceMotion ? Duration.zero : kDockDotFadeDuration,
       curve: Curves.easeOutCubic,
       child: AnimatedContainer(
         key: const ValueKey('dock.runningIndicator'),
         duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 160),
-        width: active ? 22 : 6,
+        width: widget.active ? 22 : 6,
         height: 6,
         child: CustomPaint(
           painter: _DockInstanceStackPainter(
-            count: math.min(2, windowCount),
-            color: active ? scheme.primary : scheme.onSurfaceVariant,
+            count: math.min(2, widget.windowCount),
+            color: widget.active ? scheme.primary : scheme.onSurfaceVariant,
           ),
         ),
       ),

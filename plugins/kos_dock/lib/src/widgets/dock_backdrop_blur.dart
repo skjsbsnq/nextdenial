@@ -7,8 +7,8 @@ import 'package:flutter/widgets.dart';
 /// Dock glass keeps controls out of the backdrop filter's intermediate layer.
 /// Pills can clip the backdrop to the same rounded shape as the foreground,
 /// so a glass replacement cannot affect rectangular filter-bound corners.
-/// Foreground geometry gets its own saveLayer,
-/// allowing the renderer to use offscreen MSAA without isolating the backdrop.
+/// Clip foreground geometry directly so each glass surface does not allocate
+/// an additional offscreen color/MSAA target for its controls.
 class DockBackdropBlur extends StatelessWidget {
   const DockBackdropBlur({
     required this.child,
@@ -63,12 +63,12 @@ class DockBackdropBlur extends StatelessWidget {
             ),
           ),
         ),
-        // The filter above still reads the actual scene. Only controls and
-        // their decoration enter this transparent offscreen target.
+        // The filter above still reads the actual scene. Controls only need
+        // the rounded clip; no extra foreground saveLayer is necessary.
         fade(
           ClipRRect(
             borderRadius: radius,
-            clipBehavior: Clip.antiAliasWithSaveLayer,
+            clipBehavior: Clip.antiAlias,
             child: child,
           ),
         ),

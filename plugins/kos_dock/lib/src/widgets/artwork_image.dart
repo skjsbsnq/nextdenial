@@ -47,8 +47,9 @@ class _ArtworkImageState extends State<ArtworkImage> {
               : constraints.maxHeight);
       final physicalExtent =
           logicalExtent * MediaQuery.devicePixelRatioOf(context);
+      // Cap decoded extent at 1024 physical pixels to bound texture memory.
       final decodeExtent = physicalExtent.isFinite && physicalExtent > 0
-          ? ((physicalExtent / 32).ceil() * 32).clamp(32, 2048)
+          ? ((physicalExtent / 32).ceil() * 32).clamp(32, 1024)
           : 256;
       final provider = ResizeImage(
         MemoryImage(widget.bytes),

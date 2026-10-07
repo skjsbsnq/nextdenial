@@ -371,10 +371,15 @@ class LauncherIcon extends StatelessWidget {
         package: 'kos_dock',
         fit: BoxFit.contain,
         filterQuality: FilterQuality.medium,
-        // Keep the original pixels for mipmapped sampling at every animated
-        // size. Decode-time resizing can discard the thin rim and alpha edge
-        // before Image's medium-quality sampling gets a chance to filter them.
-        // This single 1024-square RGBA asset uses about 4 MiB before mipmaps.
+        // 常驻解码上限 = iconSize·dpr·maxScale·hover（与 trash_icon.dart
+        // Image.asset 的 cacheWidth 同式）：上限 iconSize≈71.4·dpr3·1.5·1.2
+        // ≈ 385 物理像素仍远低于 1024² 原图全量解码 (~4MiB)；超出部分走
+        // FilterQuality.medium 降采样，不近邻。
+        cacheWidth: (DockMetricsScope.of(context).iconSize *
+                MediaQuery.devicePixelRatioOf(context) *
+                kDockWaveMaxScale *
+                kDockHoverScale)
+            .ceil(),
         // 原色渲染：KOS 图标外观 color 模式直接绘制原图
         // （KOS: dock/DockIcon.qml:710-716 ——
         // `layer.enabled: IconAppearanceService.mode !== "color"`、

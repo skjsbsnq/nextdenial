@@ -210,6 +210,10 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
   /// 最近一次 build 算出的 placements 与 cellSize（拖拽距离比较用）。
   Map<String, WidgetPlacement> _placements = const {};
   double _lastCellSize = 1.0;
+  final BackdropKey _cardBackdropKey = BackdropKey();
+  final Set<String> _movingCards = {};
+  final Set<String> _scalingCards = {};
+  final Map<String, bool> _cardDraggingStates = {};
   DeskCenterConfig _config = DeskCenterConfig.defaults();
 
   // ---- 数据通道 ----
@@ -501,8 +505,7 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
           // tracker 最新累计）；socket 快照到达后不再本地重建。
           if (!_activityFromSocket) {
             _activity = ActivitySnapshot(
-              uptimeByDay:
-                  _activityTracker?.uptimeByDay ?? const {},
+              uptimeByDay: _activityTracker?.uptimeByDay ?? const {},
               todayApps: _activityTracker?.entries ?? const [],
             );
           }
@@ -594,6 +597,7 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
     }
     tracker.seedUptimeByDay(merged);
   }
+
   Future<void> _restoreConfig() async {
     final store = widget.configStore;
     if (store == null) return;
@@ -759,6 +763,26 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
         };
         // 拖拽换序的距离比较用当帧 placements/cellSize（DragHandler
         // onActiveChanged 在 build 间触发）。
+        // Repacking/resizing can make cards overlap while AnimatedPositioned
+        // interpolates. Each needs its own backdrop until motion has settled.
+        // Track actual completion rather than elapsed wall time: dropped or
+        // muted frames must not restore sharing while rectangles still overlap.
+        _movingCards.removeWhere((id) => !placements.containsKey(id));
+        _scalingCards.removeWhere((id) => !placements.containsKey(id));
+        _cardDraggingStates.removeWhere((id, _) => !placements.containsKey(id));
+        for (final entry in placements.entries) {
+          final previous = _placements[entry.key];
+          if (previous != null &&
+              (_lastCellSize != cellSize || previous != entry.value)) {
+            _movingCards.add(entry.key);
+          }
+          final dragging = _dragId == entry.key;
+          final wasDragging = _cardDraggingStates[entry.key];
+          if (wasDragging != null && wasDragging != dragging) {
+            _scalingCards.add(entry.key);
+          }
+          _cardDraggingStates[entry.key] = dragging;
+        }
         _placements = placements;
         _lastCellSize = cellSize;
 
@@ -769,27 +793,38 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
           // desktopFileGrid 不在本插件范围，不实现。
           onLongPress: () => enterEditMode(),
           onSecondaryTap: () => enterEditMode(),
-          child: Stack(
-            clipBehavior: Clip.none,
-            children: [
-              // 卡片层（widgetRepeater，:451-483）。
-              for (final def in definitions)
-                if (placements[def.id] case final placement?)
-                  _positionedCard(placement, cellSize),
-              // 编辑工具栏（widgetEditToolbar，:321-371）。
-              _EditToolbar(
-                visible: _editMode,
-                onToggleLibrary: () =>
-                    setState(() => _libraryOpen = !_libraryOpen),
-                onDone: leaveEditMode,
+          child: DeskCardBackdropScope(
+            grouped:
+                !_editMode &&
+                _dragId == null &&
+                _movingCards.isEmpty &&
+                _scalingCards.isEmpty,
+            child: BackdropGroup(
+              backdropKey: _cardBackdropKey,
+              child: Stack(
+                clipBehavior: Clip.none,
+                children: [
+                  // 卡片层（widgetRepeater，:451-483）。
+                  for (final def in definitions)
+                    if (placements[def.id] case final placement?)
+                      _positionedCard(placement, cellSize),
+                  // 编辑工具栏（widgetEditToolbar，:321-371）。
+                  _EditToolbar(
+                    visible: _editMode,
+                    onToggleLibrary: () =>
+                        setState(() => _libraryOpen = !_libraryOpen),
+                    onDone: leaveEditMode,
+                  ),
+                  // 部件库面板（widgetLibrary，:373-449）。
+                  _WidgetLibrary(
+                    visible: _editMode && _libraryOpen,
+                    isActive: _config.isVisible,
+                    onToggle: (id) =>
+                        setWidgetVisible(id, !_config.isVisible(id)),
+                  ),
+                ],
               ),
-              // 部件库面板（widgetLibrary，:373-449）。
-              _WidgetLibrary(
-                visible: _editMode && _libraryOpen,
-                isActive: _config.isVisible,
-                onToggle: (id) => setWidgetVisible(id, !_config.isVisible(id)),
-              ),
-            ],
+            ),
           ),
         );
       },
@@ -830,6 +865,7 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
       // `transform: Translate{x:dragOffsetX}` + dragOffset 直接赋值，
       // :459-464）——跳过隐式动画避免回追。
       duration: dragging ? Duration.zero : _kMotionNormal,
+      onEnd: () => _finishCardMotion(id, _movingCards),
       left: left,
       top: top,
       width: width,
@@ -857,8 +893,7 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
                 // 语义的无参入口）。
                 onTap: _editMode
                     ? null
-                    : () =>
-                        _openPanel(kosDeskPanelAppIds[id] ?? id, const []),
+                    : () => _openPanel(kosDeskPanelAppIds[id] ?? id, const []),
                 // TapHandler acceptedButtons:RightButton（:486-490）→
                 // 右键进编辑。
                 onSecondaryTap: () => enterEditMode(),
@@ -883,6 +918,7 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
                     scale: dragging ? 1.035 : 1.0,
                     duration: const Duration(milliseconds: 120),
                     curve: Curves.easeOutCubic,
+                    onEnd: () => _finishCardMotion(id, _scalingCards),
                     child: _cardFor(id, size),
                   ),
                 ),
@@ -988,6 +1024,10 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
     });
   }
 
+  void _finishCardMotion(String id, Set<String> pending) {
+    if (pending.contains(id)) setState(() => pending.remove(id));
+  }
+
   /// `spanSize`（:253）：`span * cellSize + (span - 1) * gap`（当帧
   /// cellSize）。供卡片定位与拖拽中心比较共用。
   double _spanSize(int span) => span * _lastCellSize + (span - 1) * _Grid.gap;
@@ -998,6 +1038,7 @@ class KosDeskCenterViewState extends State<KosDeskCenterView> {
     final step = _lastCellSize + _Grid.gap;
     return Offset(placement.column * step, placement.row * step);
   }
+
   /// 分卡装配（widgetContentLayer 的 Loader 分派，:608-1986）。
   /// 七卡按 id 分派（activity 实卡归 TASK-06，本轮询近似方案见 §9）。
   Widget _cardFor(String id, WidgetSize size) {

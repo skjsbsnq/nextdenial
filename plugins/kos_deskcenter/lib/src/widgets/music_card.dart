@@ -430,16 +430,14 @@ class _MusicNotes extends StatelessWidget {
               Positioned(
                 left: _offsets[i], // :1775-1776
                 top: _noteY(i, ms),
-                child: Opacity(
-                  opacity: _noteOpacity(i, ms),
-                  child: Text(
-                    _glyphs[i],
-                    style: TextStyle(
-                      color: color,
-                      fontSize: i == 1 ? 18 : 14, // :1779
-                      fontWeight: FontWeight.w600, // DemiBold
-                      height: 1,
-                    ),
+                // 透明度折进文字色（Opacity widget 每帧 saveLayer）。
+                child: Text(
+                  _glyphs[i],
+                  style: TextStyle(
+                    color: color.withValues(alpha: _noteOpacity(i, ms)),
+                    fontSize: i == 1 ? 18 : 14, // :1779
+                    fontWeight: FontWeight.w600, // DemiBold
+                    height: 1,
                   ),
                 ),
               ),
@@ -792,25 +790,31 @@ class _MediaButtonState extends State<_MediaButton> {
             }
           : null,
       onTapCancel: widget.enabled ? () => setState(() => _down = false) : null,
-      child: Opacity(
-        opacity: widget.enabled ? 1 : 0.32, // :27
-        child: SizedBox(
-          width: 36, // :22 implicitWidth
-          height: 36, // :23
-          child: Center(
-            child: AnimatedScale(
-              scale: _down ? 0.94 : 1, // :38 down→0.94
-              duration: const Duration(milliseconds: 100), // :40
-              curve: Curves.easeOutCubic,
-              child: Container(
-                width: disc,
-                height: disc,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: widget.fill, // :45 fill
-                ),
-                alignment: Alignment.center,
-                child: Icon(widget.glyph, color: widget.ink, size: iconSize),
+      // 禁用态透明度（:27 0.32）折进 ink/fill 色，避免 Opacity saveLayer。
+      child: SizedBox(
+        width: 36, // :22 implicitWidth
+        height: 36, // :23
+        child: Center(
+          child: AnimatedScale(
+            scale: _down ? 0.94 : 1, // :38 down→0.94
+            duration: const Duration(milliseconds: 100), // :40
+            curve: Curves.easeOutCubic,
+            child: Container(
+              width: disc,
+              height: disc,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: widget.enabled
+                    ? widget.fill
+                    : widget.fill.withValues(alpha: 0.32), // :45 fill
+              ),
+              alignment: Alignment.center,
+              child: Icon(
+                widget.glyph,
+                color: widget.enabled
+                    ? widget.ink
+                    : widget.ink.withValues(alpha: 0.32),
+                size: iconSize,
               ),
             ),
           ),

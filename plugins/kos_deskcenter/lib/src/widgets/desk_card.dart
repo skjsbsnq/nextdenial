@@ -13,6 +13,8 @@
 library;
 
 import 'package:denial_flutter_sdk/effects.dart' show ShellBackdropBlur;
+import 'package:denial_flutter_sdk/glass_configuration.dart'
+    show ShellTransparencyMode;
 import 'package:denial_flutter_sdk/shell_theme.dart'
     show ShellThemeBuildContext;
 import 'package:flutter/material.dart' show Material;
@@ -36,6 +38,28 @@ const Map<WidgetSize, String> kosWidgetSizeLabels = {
   WidgetSize.large: '大',
 };
 
+/// Only a settled, non-overlapping grid can share its backdrop snapshot.
+/// Keep the scope in the tree during editing so card state is not recreated.
+class DeskCardBackdropScope extends InheritedWidget {
+  const DeskCardBackdropScope({
+    required this.grouped,
+    required super.child,
+    super.key,
+  });
+
+  final bool grouped;
+
+  static bool groupedOf(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<DeskCardBackdropScope>()
+          ?.grouped ??
+      false;
+
+  @override
+  bool updateShouldNotify(DeskCardBackdropScope oldWidget) =>
+      grouped != oldWidget.grouped;
+}
+
 /// DeskCenter 小部件卡片。
 class DeskCard extends StatelessWidget {
   const DeskCard({
@@ -53,7 +77,6 @@ class DeskCard extends StatelessWidget {
   /// 卡内容（对应 `DeskWidgetCard` 内嵌 Loader 的内容层，
   /// DeskCenterWindow.qml:596-610）。
   final Widget child;
-
 
   /// 尺寸档位，驱动编辑态尺寸角标标签。
   final WidgetSize size;
@@ -89,8 +112,14 @@ class DeskCard extends StatelessWidget {
     );
 
     return ShellBackdropBlur(
-      // 与 taskbar 的 `effectivePanelOpacity < 1` 门控等价：off 模式不模糊。
-      blur: theme.backdropBlurEnabled,
+      // Opaque foregrounds completely cover the filtered backdrop.
+      blur: theme.backdropBlurEnabled && theme.effectiveCardOpacity < 1,
+      // Glass grouping forces a shared backdrop cache and prevents the
+      // engine's direct-composition path. Keep glass filters independent;
+      // non-overlapping plain blur cards can still share their blur input.
+      grouped:
+          theme.transparencyMode == ShellTransparencyMode.blur &&
+          DeskCardBackdropScope.groupedOf(context),
       // 前景不进 filter 层（液态玻璃的 refraction/edge 光效不污染内容）。
       separateChild: true,
       borderRadius: borderRadius,
@@ -105,6 +134,8 @@ class DeskCard extends StatelessWidget {
               color: theme.cardColor(colors.surfaceContainer),
               borderRadius: borderRadius,
               clipBehavior: Clip.antiAlias,
+              // Draw controls directly without a per-card compositing/cache
+              // layer, and keep their subtree stable across material changes.
               child: child,
             ),
           ),

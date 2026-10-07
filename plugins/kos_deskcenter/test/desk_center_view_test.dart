@@ -10,7 +10,9 @@
 
 import 'dart:io';
 
+import 'package:denial_flutter_sdk/theme.dart';
 import 'package:flutter/gestures.dart';
+import 'package:flutter/rendering.dart' show RenderBackdropFilter;
 import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -30,9 +32,7 @@ import 'package:kos_deskcenter/src/widgets/activity_card.dart';
 Widget _wrap(Widget child) => ProviderScope(
   child: Directionality(
     textDirection: TextDirection.ltr,
-    child: Center(
-      child: SizedBox(width: 800, height: 1200, child: child),
-    ),
+    child: Center(child: SizedBox(width: 800, height: 1200, child: child)),
   ),
 );
 
@@ -54,6 +54,121 @@ Future<void> _enterEdit(WidgetTester tester) async {
 }
 
 void main() {
+  group('backdrop resource sharing', () {
+    Widget blurView() => ShellTheme(
+      data: const ShellThemeData(
+        transparencyMode: ShellTransparencyMode.blur,
+        cardOpacity: 0.7,
+      ),
+      child: const KosDeskCenterView(),
+    );
+
+    List<RenderBackdropFilter> filters(WidgetTester tester) => [
+      for (final element in find.byType(BackdropFilter).evaluate())
+        element.renderObject! as RenderBackdropFilter,
+    ];
+
+    testWidgets('settled cards share a stable backdrop; editing keeps state', (
+      tester,
+    ) async {
+      await _pumpView(tester, blurView());
+      final clockState = tester.state(find.byType(KosClockCard));
+      final keys = filters(tester).map((filter) => filter.backdropKey).toSet();
+      expect(keys, hasLength(1));
+      expect(keys.single, isNotNull);
+      _state(tester).enterEditMode();
+      await tester.pump();
+      expect(
+        filters(tester).every((filter) => filter.backdropKey == null),
+        isTrue,
+      );
+      expect(tester.state(find.byType(KosClockCard)), same(clockState));
+      _state(tester).leaveEditMode();
+      await tester.pump();
+      expect(filters(tester).map((filter) => filter.backdropKey).toSet(), keys);
+      expect(tester.state(find.byType(KosClockCard)), same(clockState));
+      await tester.pumpWidget(const SizedBox());
+    });
+
+    testWidgets(
+      'repacking temporarily disables sharing, including after edit',
+      (tester) async {
+        await _pumpView(tester, blurView());
+        _state(tester).enterEditMode();
+        _state(tester).cycleSize('clock');
+        await tester.pump();
+        _state(tester).leaveEditMode();
+        await tester.pump();
+        expect(
+          filters(tester).every((filter) => filter.backdropKey == null),
+          isTrue,
+        );
+        await tester.pump(const Duration(milliseconds: 300));
+        final keys = filters(tester)
+            .map((filter) => filter.backdropKey)
+            .toSet();
+        expect(keys, hasLength(1));
+        expect(keys.single, isNotNull);
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
+    testWidgets(
+      'material changes preserve foreground state; glass stays ungrouped',
+      (tester) async {
+        final mode = ValueNotifier(ShellTransparencyMode.blur);
+        addTearDown(mode.dispose);
+        await _pumpView(
+          tester,
+          ValueListenableBuilder<ShellTransparencyMode>(
+            valueListenable: mode,
+            builder: (_, value, child) => ShellTheme(
+              data: ShellThemeData(transparencyMode: value, cardOpacity: 0.7),
+              child: child!,
+            ),
+            child: DeskCardBackdropScope(
+              grouped: true,
+              child: BackdropGroup(
+                child: DeskCard(
+                  child: StatefulBuilder(
+                    builder: (_, _) => const Text('foreground'),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        );
+        final foreground = tester.state(find.byType(StatefulBuilder));
+        final sharedKey = filters(tester).single.backdropKey;
+        expect(sharedKey, isNotNull);
+        mode.value = ShellTransparencyMode.glass;
+        await tester.pump();
+        expect(filters(tester).single.backdropKey, isNull);
+        expect(tester.state(find.byType(StatefulBuilder)), same(foreground));
+        mode.value = ShellTransparencyMode.blur;
+        await tester.pump();
+        expect(filters(tester).single.backdropKey, same(sharedKey));
+        expect(tester.state(find.byType(StatefulBuilder)), same(foreground));
+        await tester.pumpWidget(const SizedBox());
+      },
+    );
+
+    testWidgets('opaque cards have no backdrop filters', (tester) async {
+      await _pumpView(
+        tester,
+        ShellTheme(
+          data: const ShellThemeData(
+            transparencyMode: ShellTransparencyMode.blur,
+            cardOpacity: 1,
+          ),
+          child: const KosDeskCenterView(),
+        ),
+      );
+      expect(find.byType(BackdropFilter), findsNothing);
+      await tester.pumpWidget(const SizedBox());
+    });
+  });
+
   group('KosDeskCenterView 渲染', () {
     testWidgets('默认配置渲染全部 7 张卡', (tester) async {
       await _pumpView(tester, const KosDeskCenterView());
@@ -80,9 +195,7 @@ void main() {
   });
 
   group('编辑模式', () {
-    testWidgets('长按空白进入编辑态，「完成」退出（:315-318、:362-366）', (
-      tester,
-    ) async {
+    testWidgets('长按空白进入编辑态，「完成」退出（:315-318、:362-366）', (tester) async {
       await _pumpView(tester, const KosDeskCenterView());
       await tester.pump();
       expect(_state(tester).editMode, isFalse);
@@ -148,9 +261,7 @@ void main() {
       tempDir.deleteSync(recursive: true);
     });
 
-    testWidgets('「−」角标隐藏部件并落盘（:563-566 + sync :64-65）', (
-      tester,
-    ) async {
+    testWidgets('「−」角标隐藏部件并落盘（:563-566 + sync :64-65）', (tester) async {
       await _pumpView(tester, KosDeskCenterView(configStore: store));
       await _enterEdit(tester);
       await _enterEdit(tester);
@@ -176,16 +287,11 @@ void main() {
       await tester.pumpWidget(const SizedBox());
     });
 
-    testWidgets('尺寸角标循环 medium→large（:588-590 cycleSize）', (
-      tester,
-    ) async {
+    testWidgets('尺寸角标循环 medium→large（:588-590 cycleSize）', (tester) async {
       await _pumpView(tester, const KosDeskCenterView());
       await tester.pump();
       await _enterEdit(tester);
-      expect(
-        _state(tester).config.sizeFor('music'),
-        WidgetSize.medium,
-      );
+      expect(_state(tester).config.sizeFor('music'), WidgetSize.medium);
       // music 卡的尺寸角标文本 = 当前档中文标签（'中'）。
       final sizeBadge = find.descendant(
         of: find.byType(KosMusicCard),
