@@ -60,6 +60,7 @@ import 'package:denial_sdk/system.dart' show MprisPlaybackState;
 import 'package:denial_flutter_sdk/shell_theme.dart'
     show ShellThemeBuildContext, ShellThemeData;
 import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart' show Icons;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 
@@ -711,7 +712,7 @@ class _DetailsPane extends StatelessWidget {
                 children: [
                   _MediaButton(
                     primary: false,
-                    glyph: '⏮', // media-previous（:1961 SVG→字符近似）
+                    glyph: Icons.skip_previous, // media-previous
                     enabled: hasPlayer && (media?.canGoPrevious ?? false),
                     ink: colors.controlInk,
                     fill: colors.controlFill,
@@ -721,7 +722,9 @@ class _DetailsPane extends StatelessWidget {
                   _MediaButton(
                     primary: true, // :1959 index===1
                     // :1963 isPlaying→pause else play。
-                    glyph: (media?.playing ?? false) ? '⏸' : '▶',
+                    glyph: (media?.playing ?? false)
+                        ? Icons.pause
+                        : Icons.play_arrow,
                     enabled:
                         hasPlayer &&
                         ((media?.canPlay ?? false) ||
@@ -733,7 +736,7 @@ class _DetailsPane extends StatelessWidget {
                   const SizedBox(width: 10),
                   _MediaButton(
                     primary: false,
-                    glyph: '⏭', // media-next（:1962 SVG→字符近似）
+                    glyph: Icons.skip_next, // media-next
                     enabled: hasPlayer && (media?.canGoNext ?? false),
                     ink: colors.controlInk,
                     fill: colors.controlFill,
@@ -763,7 +766,7 @@ class _MediaButton extends StatefulWidget {
   });
 
   final bool primary;
-  final String glyph;
+  final IconData glyph;
   final bool enabled;
   final Color ink;
   final Color fill;
@@ -809,14 +812,7 @@ class _MediaButtonState extends State<_MediaButton> {
                   color: widget.fill, // :45 fill
                 ),
                 alignment: Alignment.center,
-                child: Text(
-                  widget.glyph,
-                  style: TextStyle(
-                    color: widget.ink, // :62-66 BundledIcon → 字符近似
-                    fontSize: iconSize,
-                    height: 1,
-                  ),
-                ),
+                child: Icon(widget.glyph, color: widget.ink, size: iconSize),
               ),
             ),
           ),

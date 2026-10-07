@@ -6,6 +6,7 @@
 import 'package:denial_flutter_sdk/services.dart';
 import 'package:denial_sdk/system.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart' show Icons;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kos_deskcenter/src/widgets/music_card.dart';
@@ -70,15 +71,15 @@ void main() {
     expect(find.text('周杰伦'), findsOneWidget); // :1874 artistLabel
     expect(find.text('1:03'), findsOneWidget); // :1934 formatPlaybackTime
     expect(find.text('3:34'), findsOneWidget); // :1940 safeLength 214s
-    // 控制钮字符近似（media-previous/play-pause/next）。
-    expect(find.text('⏮'), findsOneWidget);
-    expect(find.text('⏸'), findsOneWidget); // 播放中 → 暂停图标 :1963
-    expect(find.text('⏭'), findsOneWidget);
+    // 单色控制图标（media-previous/play-pause/next）。
+    expect(find.byIcon(Icons.skip_previous), findsOneWidget);
+    expect(find.byIcon(Icons.pause), findsOneWidget); // 播放中 → 暂停图标 :1963
+    expect(find.byIcon(Icons.skip_next), findsOneWidget);
 
     // 点击顺序：prev → pause → next（DockMprisService.qml:176-190）。
-    await tester.tap(find.text('⏮'));
-    await tester.tap(find.text('⏸'));
-    await tester.tap(find.text('⏭'));
+    await tester.tap(find.byIcon(Icons.skip_previous));
+    await tester.tap(find.byIcon(Icons.pause));
+    await tester.tap(find.byIcon(Icons.skip_next));
     expect(commands.calls, ['previous', 'playPause', 'next']);
     await tester.pumpWidget(const SizedBox()); // 收尾停动画
   });
@@ -95,7 +96,7 @@ void main() {
       ),
     );
     await tester.pump();
-    expect(find.text('▶'), findsOneWidget); // 非播放 → play 图标
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget); // 非播放 → play 图标
     await tester.pumpWidget(const SizedBox());
   });
 
@@ -149,5 +150,4 @@ void main() {
     expect(calls.last.$2, isEmpty); // :1718-1722 无参数
     await tester.pumpWidget(const SizedBox());
   });
-
 }

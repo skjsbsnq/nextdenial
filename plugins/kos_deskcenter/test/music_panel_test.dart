@@ -17,9 +17,9 @@ import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:denial_sdk/system.dart';
 import 'package:flutter/foundation.dart' show Uint8List;
-import 'package:flutter/material.dart'
-    show Color, MaterialApp, Scaffold;
+import 'package:flutter/material.dart' show Color, MaterialApp, Scaffold;
 import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart' show Icons;
 import 'package:kos_deskcenter/src/widgets/desk_panel_shell.dart';
 import 'package:kos_deskcenter/src/widgets/music_panel.dart';
 
@@ -84,9 +84,7 @@ Widget _wrap(Widget child) => ProviderScope(
     debugShowCheckedModeBanner: false,
     home: Scaffold(
       backgroundColor: const Color(0x00000000),
-      body: Center(
-        child: SizedBox(width: 1000, height: 800, child: child),
-      ),
+      body: Center(child: SizedBox(width: 1000, height: 800, child: child)),
     ),
   ),
 );
@@ -146,9 +144,7 @@ void main() {
     expect(commands.calls, isEmpty);
     // 禁用透明度 0.32。
     expect(
-      find.byWidgetPredicate(
-        (w) => w is Opacity && w.opacity == 0.32,
-      ),
+      find.byWidgetPredicate((w) => w is Opacity && w.opacity == 0.32),
       findsNWidgets(3),
     );
     await tester.pumpWidget(const SizedBox());
@@ -173,7 +169,7 @@ void main() {
     expect(find.text('专辑'), findsOneWidget);
     expect(find.text('1:00'), findsOneWidget); // position 1min
     expect(find.text('3:30'), findsOneWidget); // length 3:30
-    expect(find.text('⏸'), findsOneWidget); // 播放中 → 暂停
+    expect(find.byIcon(Icons.pause), findsOneWidget); // 播放中 → 暂停
     expect(find.text('TestPlayer'), findsOneWidget); // identity 页脚
     await tester.pumpWidget(const SizedBox()); // 停 250ms 位置钟
   });
@@ -210,7 +206,7 @@ void main() {
         clock: () => base,
       ),
     );
-    expect(find.text('▶'), findsOneWidget);
+    expect(find.byIcon(Icons.play_arrow), findsOneWidget);
     expect(find.text('1:00'), findsOneWidget);
     // 暂停不启位置钟：推进真实 pump 后文本不变。
     await tester.pump(const Duration(milliseconds: 600));

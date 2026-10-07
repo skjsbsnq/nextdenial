@@ -37,6 +37,7 @@ import 'package:denial_flutter_sdk/shell_theme.dart'
 import 'package:denial_flutter_sdk/tokens.dart' show ShellText;
 import 'package:denial_sdk/system.dart' show MprisPlaybackState;
 import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart' show Icons;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 
@@ -297,7 +298,7 @@ class _MusicPanelState extends ConsumerState<MusicPanel> {
               _PanelMediaButton(
                 key: const ValueKey('music-panel-prev'),
                 primary: false,
-                glyph: '⏮',
+                glyph: Icons.skip_previous,
                 enabled: hasPlayer && (media?.canGoPrevious ?? false),
                 ink: palette.controlInk,
                 fill: palette.controlFill,
@@ -307,7 +308,7 @@ class _MusicPanelState extends ConsumerState<MusicPanel> {
               _PanelMediaButton(
                 key: const ValueKey('music-panel-toggle'),
                 primary: true,
-                glyph: playing ? '⏸' : '▶',
+                glyph: playing ? Icons.pause : Icons.play_arrow,
                 enabled:
                     hasPlayer &&
                     ((media?.canPlay ?? false) || (media?.canPause ?? false)),
@@ -319,7 +320,7 @@ class _MusicPanelState extends ConsumerState<MusicPanel> {
               _PanelMediaButton(
                 key: const ValueKey('music-panel-next'),
                 primary: false,
-                glyph: '⏭',
+                glyph: Icons.skip_next,
                 enabled: hasPlayer && (media?.canGoNext ?? false),
                 ink: palette.controlInk,
                 fill: palette.controlFill,
@@ -389,10 +390,7 @@ class _PanelCover extends StatelessWidget {
                   style: TextStyle(
                     color: palette.placeholderNote,
                     fontSize:
-                        math.min(
-                          constraints.maxWidth,
-                          constraints.maxHeight,
-                        ) *
+                        math.min(constraints.maxWidth, constraints.maxHeight) *
                         0.42,
                     height: 1,
                   ),
@@ -463,7 +461,7 @@ class _PanelMediaButton extends StatefulWidget {
   });
 
   final bool primary;
-  final String glyph;
+  final IconData glyph;
   final bool enabled;
   final Color ink;
   final Color fill;
@@ -508,14 +506,7 @@ class _PanelMediaButtonState extends State<_PanelMediaButton> {
                   color: widget.fill,
                 ),
                 alignment: Alignment.center,
-                child: Text(
-                  widget.glyph,
-                  style: TextStyle(
-                    color: widget.ink,
-                    fontSize: iconSize,
-                    height: 1,
-                  ),
-                ),
+                child: Icon(widget.glyph, color: widget.ink, size: iconSize),
               ),
             ),
           ),
