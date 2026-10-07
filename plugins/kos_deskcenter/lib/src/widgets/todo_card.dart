@@ -31,6 +31,8 @@
 /// 源文件行号均指 `/home/wwt/文档/NextKde/shell/desktop/modules/` 相对根。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'package:denial_flutter_sdk/shell_theme.dart'
     show ShellThemeBuildContext, ShellThemeData;
 import 'package:flutter/widgets.dart';
@@ -48,7 +50,9 @@ final class KosTodoColors {
     this.headerText = const Color(0xFF1D1B20), // :2086 ink(\"white\") 板上近似
     this.titleInk = const Color(0xFF303038), // :2126 ink(\"#303038\")
     this.countInk = const Color(0xFF33333A), // :2094 ink(\"#33333a\")
-    this.countSubInk = const Color(0x99686873), // :2101 ink(\"#686873\",0.6) 静态近似
+    this.countSubInk = const Color(
+      0x99686873,
+    ), // :2101 ink(\"#686873\",0.6) 静态近似
     this.checkboxRing = const Color(
       0xB3FF5D66,
     ), // :2121 accent(primary,\"#ff5d66\",0.7)
@@ -57,21 +61,16 @@ final class KosTodoColors {
     this.emptyInk = const Color(0x996C6C75), // :2163 ink(\"#6c6c75\",0.6) 静态近似
   });
 
-  /// 按 ShellTheme 取默认色板（替换按 Material `Theme.brightness` 的
-  /// pick 分叉——插件表面下没有 MaterialApp/Theme 祖先，Theme.of 恒回退
-  /// light 基线，真实亮度取 `context.shellTheme.brightness`）：
-  /// - 主内容（标题/计数/项名）→ shell `textPrimary`；
-  /// - 次要/弱化（副计数/未逾期截止/空态）→ shell `textSecondary`；
-  /// - `checkboxRing`/`dueOverdue` 为 accent/语义色，保留源值不走壳色板。
+  /// 透明桌面材质采用 NextKde 白色 backdrop ink；不透明模式采用壳色板。
+  /// 此解析只影响卡片内容，不修改详情面板、菜单或卡片表面材质。
   static KosTodoColors forShell(ShellThemeData theme) {
-    final colors = theme.colors;
     return KosTodoColors(
-      headerText: colors.textPrimary,
-      titleInk: colors.textPrimary,
-      countInk: colors.textPrimary,
-      countSubInk: colors.textSecondary,
-      dueFuture: colors.textSecondary,
-      emptyInk: colors.textSecondary,
+      headerText: backdropInk(theme),
+      titleInk: backdropInk(theme),
+      countInk: backdropInk(theme),
+      countSubInk: backdropSecondaryInk(theme),
+      dueFuture: backdropSecondaryInk(theme),
+      emptyInk: backdropSecondaryInk(theme),
     );
   }
 
@@ -91,6 +90,7 @@ final class KosTodoColors {
   /// 圆环描边 `accent(colors.primary, "#ff5d66", 0.7)`（:2121）：
   /// material → primary@0.7 角色，静态近似 #ff5d66@0.7。
   final Color checkboxRing;
+
   /// 逾期截止色 `#e23d52`（:2138 `due < today` 分支）；语义警示色保留
   /// 源值，不走壳色板。
   final Color dueOverdue;
@@ -98,7 +98,6 @@ final class KosTodoColors {
   /// 未逾期截止色（:2138 另一分支 `#7b7b84` / onBackdrop 白@0.6 合并 →
   /// shell `textSecondary`）。
   final Color dueFuture;
-
 
   /// 空态文案 `ink("#6c6c75", 0.6)`（:2163）静态近似。
   final Color emptyInk;
@@ -132,8 +131,8 @@ class KosTodoCard extends StatelessWidget {
   /// null 时用 [snapshot?.today]，再缺则 `DateTime.now()` 当日。
   final String? today;
 
-/// 内容色板；null → build 时按 `context.shellTheme` 解析
-/// （[KosTodoColors.forShell]）。
+  /// 内容色板；null → build 时按 `context.shellTheme` 解析
+  /// （[KosTodoColors.forShell]）。
   final KosTodoColors? colors;
 
   /// 尺寸档位（`DeskCenterConfigService.sizeFor("todo")`，:2034-2035）：

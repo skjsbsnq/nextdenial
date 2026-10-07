@@ -33,6 +33,8 @@
 ///   （9px 右对齐）。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -265,6 +267,7 @@ class ActivityTracker {
 
   /// 按日分桶的开机秒数（`yyyy-MM-dd` → 秒；TASK-18）。stop() 时段不计。
   final Map<String, double> _uptimeByDay = {};
+
   /// 排序后的榜单（`seconds` 降序；对齐 `todayApps()` :44-47）。
   List<ActivityAppEntry> get entries {
     final list = _apps.values.toList()
@@ -395,20 +398,14 @@ final class KosActivityCardColors {
     this.cellFill = const Color(0xFFFFFFFF), // 热力格基色白（:1576 白系 ramp）
   });
 
-  /// 按 ShellTheme 取默认色板：
-  /// - 表头/应用名 → shell `textPrimary`；
-  /// - 时长 → shell `textSecondary`；
-  /// - `cellEmpty`（无开机格底）保留 rgba(1,1,1,0.08) 白-alpha——热力格恒为
-  ///   半透明卡面上的浅色叠加，亮壳下同样可读（热图是数据 viz，不走文字
-  ///   墨色）；`cellFill`（level>0 格填充基色）→ `textPrimary`，明暗壳随
-  ///   卡面文字同调。
+  /// 透明桌面材质采用 NextKde 白色 backdrop ink；不透明模式采用壳色板。
+  /// 此解析只影响卡片内容，不修改详情面板、菜单或卡片表面材质。
   static KosActivityCardColors forShell(ShellThemeData theme) {
-    final colors = theme.colors;
     return KosActivityCardColors(
-      headerInk: colors.textPrimary, // :1548 ink → textPrimary
-      appNameInk: colors.textPrimary, // :1637 ink → textPrimary
-      appDurationInk: colors.textSecondary, // :1630 ink → textSecondary
-      cellFill: colors.textPrimary, // :1576 白系 ramp 基色 → textPrimary
+      headerInk: backdropInk(theme), // :1548 ink → textPrimary
+      appNameInk: backdropInk(theme), // :1637 ink → textPrimary
+      appDurationInk: backdropSecondaryInk(theme), // :1630 ink → textSecondary
+      cellFill: backdropInk(theme), // :1576 白系 ramp 基色 → textPrimary
     );
   }
 
@@ -428,6 +425,7 @@ final class KosActivityCardColors {
   /// `textPrimary`；`0.22+level*0.72` alpha 由 `_cellColor` 施加）。
   final Color cellFill;
 }
+
 /// 应用行左侧 12×12 图标的解析回调（`IconImage`，:1610-1625）：返回
 /// null 时卡内渲染空占位盒。
 typedef ActivityIconBuilder = Widget? Function(
@@ -470,7 +468,6 @@ class KosActivityCard extends StatefulWidget {
 
   /// 尺寸档位（透传 [DeskCard.size]）。
   final WidgetSize size;
-
 
   /// 编辑模式角标。
   final bool editMode;

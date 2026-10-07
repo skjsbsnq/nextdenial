@@ -24,6 +24,8 @@
 /// 文字 `textSecondary`，其余前景/材质走 `context.shellTheme/shellColors`。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -153,7 +155,7 @@ class _SystemPanelState extends ConsumerState<SystemPanel> {
         _cpuSeries;
     final metrics = _metrics ?? widget.data.metrics;
     final cardColors =
-        KosSystemCardColors.forShell(context.shellTheme);
+        KosSystemCardColors.forShell(panelContentTheme(context.shellTheme));
 
     return ConstrainedBox(
       constraints: const BoxConstraints(maxWidth: 640),

@@ -987,3 +987,12 @@ smoothstep 固定槽位（`AppearanceTokens.qml:441-446` influence 圆衰减 +
   `kDockReorderDragThreshold`=10、`kDockHoverEaseDuration`=100ms；删除
   `kDockHoverSpring`/`kDockMagnificationMaxScale` 等旧 magnification
   常量。
+
+## 2026-10-07 · Dock 时钟/资源配色与信息详情首帧
+
+- 时钟与资源卡原已参与 30 秒轮播，悬停暂停、滚轮切页；保留此行为。
+- 资源卡恢复原版随温度蓝→橙红的横向渐变、白色前景、青/珊瑚温度点。
+- 时钟卡恢复三站横向 ambient 渐变；SDK 未提供 NextKde 壁纸双调色板，
+  用主题 accent 和 panel 色近似。透明材质用白字，关闭透明时用主题前景。
+- 信息详情与已修复的菜单一致：模糊从第一帧满强度采样，仅前景淡入，
+  去除整面板外层 Opacity，以消除先透明后模糊。

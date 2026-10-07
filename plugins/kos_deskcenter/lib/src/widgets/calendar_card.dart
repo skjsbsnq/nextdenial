@@ -35,6 +35,8 @@
 /// 源文件行号均指 `/home/wwt/文档/NextKde/shell/desktop/modules/` 相对根。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'package:denial_flutter_sdk/services.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart'
     show ShellThemeBuildContext, ShellThemeData;
@@ -83,7 +85,9 @@ final class KosCalendarColors {
     this.weekendHeader = const Color(0xFFE95A63), // :2300 \"#e95a63\"
     this.weekdayHeader = const Color(0xFF5D5D65), // :2300 \"#5d5d65\"
     this.gridInk = const Color(0xFF29292F), // :2338 ink(\"#29292f\")
-    this.todayFill = const Color(0x38EF5661), // :2324 ink(\"#ef5661\",0.22) 静态近似
+    this.todayFill = const Color(
+      0x38EF5661,
+    ), // :2324 ink(\"#ef5661\",0.22) 静态近似
     this.todayForeground = const Color(0xFFFFFFFF), // :2337 白 on primary
     this.eventInk = const Color(0xFF4D4D55), // :2272 深色近似
     this.unavailableInk = const Color(
@@ -91,25 +95,25 @@ final class KosCalendarColors {
     ), // :2281 ink(\"#9a9aa2\",0.55) 静态近似
   });
 
-  /// 按 ShellTheme 取默认色板：ink 系角色走 shell `textPrimary`/
-  /// `textSecondary`（随明暗壳自动解析），accent/语义色（weekendHeader/
-  /// todayFill/todayForeground）保留源值不走壳色板。
+  /// 透明桌面材质采用 NextKde 白色 backdrop ink；不透明模式采用壳色板。
+  /// 此解析只影响卡片内容，不修改详情面板、菜单或卡片表面材质。
   static KosCalendarColors forShell(ShellThemeData theme) {
-    final colors = theme.colors;
     return KosCalendarColors(
-      headerText: colors.textPrimary,
-      separator: colors.hairlineSoft,
-      dayNumber: colors.textPrimary,
-      weekdayLunar: colors.textSecondary,
-      weekdayHeader: colors.textSecondary,
-      gridInk: colors.textPrimary,
+      weekendHeader: usesBackdropInk(theme)
+          ? backdropInk(theme)
+          : const Color(0xFFE95A63),
+      headerText: backdropInk(theme),
+      separator: backdropHairline(theme),
+      dayNumber: backdropInk(theme),
+      weekdayLunar: backdropSecondaryInk(theme),
+      weekdayHeader: backdropSecondaryInk(theme),
+      gridInk: backdropInk(theme),
       todayFill: theme.accent.withValues(alpha: 0.22),
-      todayForeground: colors.textPrimary,
-      eventInk: colors.textSecondary,
-      unavailableInk: colors.textSecondary,
+      todayForeground: backdropInk(theme),
+      eventInk: backdropSecondaryInk(theme),
+      unavailableInk: backdropSecondaryInk(theme),
     );
   }
-
 
   /// 月份标题 `yyyy年M月` 色（:2246 `pick(surfaceForeground,\"white\")`
   /// 的明暗合并结果 → shell `textPrimary`）。
@@ -242,7 +246,8 @@ final class KosCalendarCard extends ConsumerWidget {
     final isSmall = size == WidgetSize.small;
     final title = '$year年$month月'; // :2244 "yyyy年M月"
 
-    final colors = this.colors ?? KosCalendarColors.forShell(context.shellTheme);
+    final colors =
+        this.colors ?? KosCalendarColors.forShell(context.shellTheme);
     return DeskCard(
       size: size,
       editMode: editMode,

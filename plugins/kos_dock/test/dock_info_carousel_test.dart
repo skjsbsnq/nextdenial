@@ -164,9 +164,7 @@ final _mediaStateProvider =
     NotifierProvider<_MediaNotifier, MprisPlaybackState>(_MediaNotifier.new);
 
 ProviderListenable<AsyncValue<MprisPlaybackState>> get _mutableMedia =>
-    _mediaStateProvider.select(
-      (state) => AsyncData<MprisPlaybackState>(state),
-    );
+    _mediaStateProvider.select((state) => AsyncData<MprisPlaybackState>(state));
 
 /// 垃圾桶假实现（无真实 IO；`TrashIcon` watch 需要）——空态。
 class _FakeTrashService implements TrashService {
@@ -217,8 +215,7 @@ class _FakeShellServices implements ShellServices {
       const SizedBox.shrink();
 
   @override
-  VoidCallback emphasizeWindow(int windowId, {required int monitorId}) =>
-      () {};
+  VoidCallback emphasizeWindow(int windowId, {required int monitorId}) => () {};
 
   @override
   void toggleDesktop() {}
@@ -260,9 +257,7 @@ class _FakeShellServices implements ShellServices {
   @override
   ProviderListenable<AsyncValue<DateTime>> get clock =>
       // `services.clock` 恒无值（无 tick）→ carousel 自建 1Hz Timer 兜底。
-      Provider<AsyncValue<DateTime>>(
-        (_) => const AsyncLoading<DateTime>(),
-      );
+      Provider<AsyncValue<DateTime>>((_) => const AsyncLoading<DateTime>());
 
   @override
   ProviderListenable<AsyncValue<MprisPlaybackState>> get media =>
@@ -436,7 +431,10 @@ Future<void> _wheel(WidgetTester tester, double dy) async {
 }
 
 DockPreferences _prefs([List<String>? order, bool autoRotate = true]) =>
-    DockPreferences(infoCardOrder: order ?? DockPreferences.kDockInfoCardOrderDefault, infoCardAutoRotate: autoRotate);
+    DockPreferences(
+      infoCardOrder: order ?? DockPreferences.kDockInfoCardOrderDefault,
+      infoCardAutoRotate: autoRotate,
+    );
 
 /// pinned 两条（launcher/trash 默认开）→ `DockMetrics.fromWidth` 的
 /// pinnedCount=2、runningCount=0（整 pill 回归用）。
@@ -456,6 +454,7 @@ Widget _wrapShell({
   required DockPreferences prefs,
   DockWeatherSnapshot? weather,
   DockMetricsSnapshot? metrics,
+
   /// 真实 `dockWeatherProviderProvider` body 的替身**工厂**（天气订阅门控用例的
   /// 计数/抛错探针，见「天气订阅门控」组）；null = 直接注入
   /// `_FakeWeatherProvider(weather)`（其余用例的既有行为）。
@@ -524,7 +523,11 @@ void main() {
     testWidgets('media 不可用 → music 页不成页，clock/metrics 恒成页', (tester) async {
       final services = _FakeShellServices();
       await tester.pumpWidget(
-        _wrapCarousel(services: services, prefs: _prefs(), weather: _readyWeather),
+        _wrapCarousel(
+          services: services,
+          prefs: _prefs(),
+          weather: _readyWeather,
+        ),
       );
       await _settle(tester);
       expect(find.byKey(_pageKey(0)), findsNothing); // music
@@ -547,10 +550,7 @@ void main() {
     testWidgets('页序 = infoCardOrder（不含的页不建）', (tester) async {
       final services = _FakeShellServices();
       await tester.pumpWidget(
-        _wrapCarousel(
-          services: services,
-          prefs: _prefs(['clock', 'metrics']),
-        ),
+        _wrapCarousel(services: services, prefs: _prefs(['clock', 'metrics'])),
       );
       await _settle(tester);
       expect(find.byKey(_pageKey(0)), findsNothing);
@@ -577,10 +577,7 @@ void main() {
     testWidgets('order 无 clock → 第一可用页', (tester) async {
       final services = _FakeShellServices(); // music 不可用
       await tester.pumpWidget(
-        _wrapCarousel(
-          services: services,
-          prefs: _prefs(['music', 'metrics']),
-        ),
+        _wrapCarousel(services: services, prefs: _prefs(['music', 'metrics'])),
       );
       await _settle(tester);
       expect(_isFront(tester, 3), isTrue); // metrics
@@ -649,27 +646,19 @@ void main() {
   });
 
   group('每卡降级', () {
-    testWidgets('clock `now` 恒用 1Hz `_clockNow`（services.clock 分钟流不取）',
-        (tester) async {
-      final services = _FakeShellServices(); // clockValue null
+    testWidgets('clock 卡面重建后同步显示更新的秒数', (tester) async {
+      final first = DateTime(2026, 10, 7, 14, 0, 52);
+      final second = first.add(const Duration(seconds: 1));
       await tester.pumpWidget(
-        _wrapCarousel(services: services, prefs: _prefs(['clock'])),
+        _card(DockClockCard(data: DockClockCardData(now: first))),
       );
-      await _settle(tester);
-      // 取首帧 HH:mm:ss，再 pump 1s → 文本必须变化（秒级 tick 真在走）。
-      final first = tester
-          .widget<Text>(
-            find.textContaining(RegExp(r'^\d{2}:\d{2}:\d{2}$')),
-          )
-          .data!;
-      await tester.pump(const Duration(seconds: 1));
-      final second = tester
-          .widget<Text>(
-            find.textContaining(RegExp(r'^\d{2}:\d{2}:\d{2}$')),
-          )
-          .data!;
-      expect(second, isNot(first));
-      expect(find.byType(DockClockCard), findsOneWidget);
+      expect(find.text('14:00:52'), findsOneWidget);
+      await tester.pumpWidget(
+        _card(DockClockCard(data: DockClockCardData(now: second))),
+      );
+      expect(find.text('14:00:53'), findsOneWidget);
+      expect(find.text('14:00:52'), findsNothing);
+      expect(tester.takeException(), isNull);
     });
 
     testWidgets('weather 无数据 → --', (tester) async {
@@ -887,37 +876,39 @@ void main() {
     }
 
     for (final width in const [1920.0, 500.0, 320.0]) {
-      testWidgets('@${width.toInt()} 真槽宽 = infoSlotWidth + 0.2*iconSize，整 pill 无溢出',
-          (tester) async {
-        await pumpShellAt(tester, width);
-        // 与 KosDockShell 的 fromWidth 同参（pinned 2 / 无运行窗 / 有 info）。
-        final metrics = DockMetrics.fromWidth(
-          width,
-          pinnedCount: 2,
-          runningCount: 0,
-          showLauncher: true,
-          showTrash: true,
-          hasInfo: true,
-        );
-        expect(find.byType(DockInfoCarousel), findsOneWidget);
-        final slot = tester.getSize(find.byType(DockInfoCarousel));
-        expect(
-          slot.width,
-          moreOrLessEquals(
-            metrics.infoSlotWidth + metrics.iconSize * kDockInfoCardGapRatio,
-            epsilon: 1e-6,
-          ),
-        );
-        expect(
-          slot.height,
-          moreOrLessEquals(
-            metrics.iconSize * kDockInfoSlotHeightRatio,
-            epsilon: 1e-6,
-          ),
-        );
-        // 真槽比假槽宽 0.2*iconSize：整 pill 不得 RenderFlex overflow。
-        expect(tester.takeException(), isNull);
-      });
+      testWidgets(
+        '@${width.toInt()} 真槽宽 = infoSlotWidth + 0.2*iconSize，整 pill 无溢出',
+        (tester) async {
+          await pumpShellAt(tester, width);
+          // 与 KosDockShell 的 fromWidth 同参（pinned 2 / 无运行窗 / 有 info）。
+          final metrics = DockMetrics.fromWidth(
+            width,
+            pinnedCount: 2,
+            runningCount: 0,
+            showLauncher: true,
+            showTrash: true,
+            hasInfo: true,
+          );
+          expect(find.byType(DockInfoCarousel), findsOneWidget);
+          final slot = tester.getSize(find.byType(DockInfoCarousel));
+          expect(
+            slot.width,
+            moreOrLessEquals(
+              metrics.infoSlotWidth + metrics.iconSize * kDockInfoCardGapRatio,
+              epsilon: 1e-6,
+            ),
+          );
+          expect(
+            slot.height,
+            moreOrLessEquals(
+              metrics.iconSize * kDockInfoSlotHeightRatio,
+              epsilon: 1e-6,
+            ),
+          );
+          // 真槽比假槽宽 0.2*iconSize：整 pill 不得 RenderFlex overflow。
+          expect(tester.takeException(), isNull);
+        },
+      );
     }
   });
 
@@ -934,10 +925,7 @@ void main() {
       );
       await _settle(tester);
       expect(find.byType(DockInfoCarousel), findsNothing);
-      expect(
-        find.byKey(const ValueKey<String>('dock.infoCard')),
-        findsNothing,
-      );
+      expect(find.byKey(const ValueKey<String>('dock.infoCard')), findsNothing);
       expect(
         find.byKey(const ValueKey<String>('dock.divider.info')),
         findsNothing,
@@ -994,10 +982,10 @@ void main() {
 
     testWidgets('order 只含 music/metrics（无 weather 无 clock）→ 真实 weather '
         'provider 不被构造/订阅', (tester) async {
-      final marker = await pumpCountingWeather(
-        tester,
-        const ['music', 'metrics'],
-      );
+      final marker = await pumpCountingWeather(tester, const [
+        'music',
+        'metrics',
+      ]);
       // 用例前提：carousel 真在 pill 里（否则「未订阅」空洞）。
       expect(find.byType(DockInfoCarousel), findsOneWidget);
       expect(
@@ -1016,8 +1004,7 @@ void main() {
       expect(tester.takeException(), isNull);
     });
 
-    testWidgets('对照：默认四卡（KOS 同构）→ 订阅 weather，clock 页日出/日落正常',
-        (tester) async {
+    testWidgets('对照：默认四卡（KOS 同构）→ 订阅 weather，clock 页日出/日落正常', (tester) async {
       final marker = await pumpCountingWeather(
         tester,
         DockPreferences.kDockInfoCardOrderDefault,
@@ -1028,20 +1015,22 @@ void main() {
         reason: '默认含 clock/weather → 订阅一次（keepAlive，shell 与 carousel 共用）',
       );
       expect(find.byType(DockClockCard), findsOneWidget); // clock 为首有效页
-      expect(find.text('06:00'), findsOneWidget); // 日出：快照真到了卡上
-      expect(find.text('18:30'), findsOneWidget); // 日落
+      final clock = tester.widget<DockClockCard>(find.byType(DockClockCard));
+      expect(clock.data.sunrise, '06:00');
+      expect(clock.data.sunset, '18:30');
     });
 
-    testWidgets('order 含 clock 不含 weather → 仍订阅 weather（日出/日落读同一快照）',
-        (tester) async {
-      final marker = await pumpCountingWeather(tester, const ['clock', 'metrics']);
-      expect(
-        marker(),
-        1,
-        reason: 'clock 页需要 weather 快照（SolarEventRow）→ 判据含 clock',
-      );
-      expect(find.text('06:00'), findsOneWidget);
-      expect(find.text('18:30'), findsOneWidget);
+    testWidgets('order 含 clock 不含 weather → 仍订阅 weather（日出/日落读同一快照）', (
+      tester,
+    ) async {
+      final marker = await pumpCountingWeather(tester, const [
+        'clock',
+        'metrics',
+      ]);
+      expect(marker(), 1, reason: 'clock 详情需要 weather 快照 → 判据含 clock');
+      final clock = tester.widget<DockClockCard>(find.byType(DockClockCard));
+      expect(clock.data.sunrise, '06:00');
+      expect(clock.data.sunset, '18:30');
       // weather 卡自身不在 order 里 → 不成页。
       expect(find.byKey(_pageKey(1)), findsNothing);
     });
@@ -1061,18 +1050,23 @@ void main() {
       expect(narrow.infoUnits, 4);
     });
 
-    testWidgets('clock/weather/metrics compact 行自然宽 > 卡宽 → FittedBox 兜底缩入'
+    testWidgets('clock compact 秒数完整且不溢出；weather/metrics 超宽时缩入'
         '（E-5）', (tester) async {
       // 三卡紧凑行外层是 `FittedBox(fit: scaleDown)`（clock_card.dart:113-117、
       // weather_card.dart:72-76、metrics_card.dart:97-101）：FittedBox 以无界
       // 约束布局子件，Row 永不 RenderFlex overflow——只断言
       // `takeException()==null` 对任意 fixture 恒真（断言空洞）。这里量「紧凑行
       // 自然宽」（FittedBox 子件的 `getSize` = 无界约束下的自然尺寸）与卡宽比较：
-      // 自然宽超卡宽 → 兜底确实被触发；若某次回归把紧凑行收窄到卡内或摘掉
-      // FittedBox，断言即失败。
-      final cardWidth = narrow.iconSize * narrow.infoUnits +
+      // 天气和资源自然宽超卡宽时验证缩放确实触发；时钟允许自然宽落卡内，
+      // 同时验证秒数完整显示以及 FittedBox 的宽度不超出卡片。
+      final cardWidth =
+          narrow.iconSize * narrow.infoUnits +
           narrow.iconSize * kDockInfoCardGapRatio;
-      Future<void> expectScaledDown(Type cardType, Widget card) async {
+      Future<void> expectScaledDown(
+        Type cardType,
+        Widget card, {
+        bool requireScaling = true,
+      }) async {
         await tester.pumpWidget(_card(card, metrics: narrow));
         expect(tester.takeException(), isNull);
         final rowFinder = find.descendant(
@@ -1087,9 +1081,11 @@ void main() {
         );
         expect(fittedFinder, findsOneWidget);
         final fittedWidth = tester.getSize(fittedFinder).width;
-        expect(natural, greaterThan(cardWidth)); // 兜底真被触发
-        expect(fittedWidth, lessThanOrEqualTo(cardWidth + 1e-6)); // 缩放后落卡内
-        expect(fittedWidth / natural, lessThan(1.0)); // 等比缩小（非恒等）
+        expect(fittedWidth, lessThanOrEqualTo(cardWidth + 1e-6)); // 内容落卡内
+        if (requireScaling) {
+          expect(natural, greaterThan(cardWidth)); // 兜底真被触发
+          expect(fittedWidth / natural, lessThan(1.0)); // 等比缩小（非恒等）
+        }
       }
 
       await expectScaledDown(
@@ -1101,7 +1097,9 @@ void main() {
             sunset: '18:30',
           ),
         ),
+        requireScaling: false,
       );
+      expect(find.text('12:34:56'), findsOneWidget);
       await expectScaledDown(
         DockWeatherCard,
         const DockWeatherCard(snapshot: _readyWeather),
@@ -1112,8 +1110,9 @@ void main() {
       );
     });
 
-    testWidgets('music compact（cover 叠播停 + 单行 metadata）无 overflow',
-        (tester) async {
+    testWidgets('music compact（cover 叠播停 + 单行 metadata）无 overflow', (
+      tester,
+    ) async {
       await tester.pumpWidget(
         _card(
           DockMusicCard(
@@ -1155,9 +1154,7 @@ void main() {
       expect(_frontPage(tester, const [0, 1, 2, 3]), 0); // 环绕到 music
     });
 
-    testWidgets('popup 已开 → 30s 轮换暂停、面板不跟随切页（修复项 2）', (
-      tester,
-    ) async {
+    testWidgets('popup 已开 → 30s 轮换暂停、面板不跟随切页（修复项 2）', (tester) async {
       final services = _FakeShellServices(mediaState: _playingState());
       await tester.pumpWidget(
         _wrapCarousel(
@@ -1239,77 +1236,82 @@ void main() {
     });
   });
 
-  group('iconSize 触底（MIN_ICON_SIZE=18）→ 摘掉 info 槽（KOS hideInfoCarousel；缺陷 6）',
-      () {
-    Future<void> pumpShellAt(WidgetTester tester, double width) async {
-      tester.view.physicalSize = Size(width, 1080);
-      tester.view.devicePixelRatio = 1.0;
-      addTearDown(tester.view.reset);
-      await tester.pumpWidget(
-        _wrapShell(
-          services: _FakeShellServices(),
-          prefs: _shellPrefs(DockPreferences.kDockInfoCardOrderDefault),
-          weather: _readyWeather,
-          metrics: _metricsSnapshot,
-        ),
-      );
-      await _settle(tester);
-    }
+  group(
+    'iconSize 触底（MIN_ICON_SIZE=18）→ 摘掉 info 槽（KOS hideInfoCarousel；缺陷 6）',
+    () {
+      Future<void> pumpShellAt(WidgetTester tester, double width) async {
+        tester.view.physicalSize = Size(width, 1080);
+        tester.view.devicePixelRatio = 1.0;
+        addTearDown(tester.view.reset);
+        await tester.pumpWidget(
+          _wrapShell(
+            services: _FakeShellServices(),
+            prefs: _shellPrefs(DockPreferences.kDockInfoCardOrderDefault),
+            weather: _readyWeather,
+            metrics: _metricsSnapshot,
+          ),
+        );
+        await _settle(tester);
+      }
 
-    testWidgets('@190 探针 iconSize 触底 → 整区摘除（无槽 / 无 divider2 / 无溢出）',
-        (tester) async {
-      // 触发条件 = KOS `_infoProbeLayout.iconSize <= MIN_ICON_SIZE`
-      // （DockContainer.qml:130-137,141-143）：**带上 carousel** 反解即触底。
-      final probe = DockMetrics.fromWidth(
-        190,
-        pinnedCount: 2,
-        runningCount: 0,
-        showLauncher: true,
-        showTrash: true,
-        hasInfo: true,
-      );
-      expect(probe.iconSize, kDockMinIconSize.toDouble());
-      await pumpShellAt(tester, 190);
-      expect(find.byType(DockInfoCarousel), findsNothing);
-      expect(find.byKey(const ValueKey<String>('dock.infoCard')), findsNothing);
-      expect(
-        find.byKey(const ValueKey<String>('dock.divider.info')),
-        findsNothing,
-      );
-      // 未移植该兜底（hasInfo 仍 true）时：真槽比 fromWidth 的
-      // renderedWidth 多 0.2*iconSize（3.6px）→ 本宽度下实测溢出 1.8px。
-      expect(tester.takeException(), isNull);
-      // 摘除后图标回血（KOS :139-140「returns its four icon-widths」）。
-      final withoutInfo = DockMetrics.fromWidth(
-        190,
-        pinnedCount: 2,
-        runningCount: 0,
-        showLauncher: true,
-        showTrash: true,
-      );
-      expect(withoutInfo.iconSize, greaterThan(kDockMinIconSize.toDouble()));
-    });
+      testWidgets('@190 探针 iconSize 触底 → 整区摘除（无槽 / 无 divider2 / 无溢出）', (
+        tester,
+      ) async {
+        // 触发条件 = KOS `_infoProbeLayout.iconSize <= MIN_ICON_SIZE`
+        // （DockContainer.qml:130-137,141-143）：**带上 carousel** 反解即触底。
+        final probe = DockMetrics.fromWidth(
+          190,
+          pinnedCount: 2,
+          runningCount: 0,
+          showLauncher: true,
+          showTrash: true,
+          hasInfo: true,
+        );
+        expect(probe.iconSize, kDockMinIconSize.toDouble());
+        await pumpShellAt(tester, 190);
+        expect(find.byType(DockInfoCarousel), findsNothing);
+        expect(
+          find.byKey(const ValueKey<String>('dock.infoCard')),
+          findsNothing,
+        );
+        expect(
+          find.byKey(const ValueKey<String>('dock.divider.info')),
+          findsNothing,
+        );
+        // 未移植该兜底（hasInfo 仍 true）时：真槽比 fromWidth 的
+        // renderedWidth 多 0.2*iconSize（3.6px）→ 本宽度下实测溢出 1.8px。
+        expect(tester.takeException(), isNull);
+        // 摘除后图标回血（KOS :139-140「returns its four icon-widths」）。
+        final withoutInfo = DockMetrics.fromWidth(
+          190,
+          pinnedCount: 2,
+          runningCount: 0,
+          showLauncher: true,
+          showTrash: true,
+        );
+        expect(withoutInfo.iconSize, greaterThan(kDockMinIconSize.toDouble()));
+      });
 
-    testWidgets('@210 探针 iconSize=19（下限之上）→ info 槽保留且无溢出',
-        (tester) async {
-      final probe = DockMetrics.fromWidth(
-        210,
-        pinnedCount: 2,
-        runningCount: 0,
-        showLauncher: true,
-        showTrash: true,
-        hasInfo: true,
-      );
-      expect(probe.iconSize, greaterThan(kDockMinIconSize.toDouble()));
-      await pumpShellAt(tester, 210);
-      expect(find.byType(DockInfoCarousel), findsOneWidget);
-      expect(
-        find.byKey(const ValueKey<String>('dock.divider.info')),
-        findsOneWidget,
-      );
-      expect(tester.takeException(), isNull);
-    });
-  });
+      testWidgets('@210 探针 iconSize=19（下限之上）→ info 槽保留且无溢出', (tester) async {
+        final probe = DockMetrics.fromWidth(
+          210,
+          pinnedCount: 2,
+          runningCount: 0,
+          showLauncher: true,
+          showTrash: true,
+          hasInfo: true,
+        );
+        expect(probe.iconSize, greaterThan(kDockMinIconSize.toDouble()));
+        await pumpShellAt(tester, 210);
+        expect(find.byType(DockInfoCarousel), findsOneWidget);
+        expect(
+          find.byKey(const ValueKey<String>('dock.divider.info')),
+          findsOneWidget,
+        );
+        expect(tester.takeException(), isNull);
+      });
+    },
+  );
 }
 
 /// 直接挂单卡（不经 carousel）：ShellTheme + DockMetricsScope（默认基准

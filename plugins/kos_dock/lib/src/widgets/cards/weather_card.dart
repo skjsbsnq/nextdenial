@@ -7,18 +7,14 @@
 /// - compact（iconSize<32）：`symbol 温度 · 体感` 单行（:217-249）。
 ///
 /// 偏差（记 docs/visual-deltas.md）：
-/// - 卡背天气状态渐变 `backgroundStart/backgroundEnd`（:19-40，8 组
-///   weatherCode 字面 RGBA）→ `panelGradient(panelBackground,
-///   panelBackgroundBottom)`（CONSTRAINTS §3 禁硬编码颜色）；
+/// - 卡背恢复源天气 artwork 渐变（:19-40），按 weatherCode/isDay 切换；
 /// - 云/太阳/雨装饰层（:69-157，BundledIcons 资产 + 旋转光线/雨滴 Repeater）
 ///   省略——无对应打包资产；
-/// - `tone()`（IconAppearanceService.styledColor）不移植——色板走 shellTheme。
+/// - `tone()` 的用户图标着色选项未移植；保留天气 artwork 原色。
 library;
 
 import 'dart:math' as math;
 
-import 'package:denial_flutter_sdk/shell_theme.dart'
-    show ShellThemeBuildContext;
 import 'package:flutter/material.dart';
 
 import '../../data/dock_weather.dart';
@@ -37,7 +33,6 @@ class DockWeatherCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final metrics = DockMetricsScope.of(context);
     final iconSize = metrics.iconSize;
-    final colors = context.shellColors;
     final backgroundGap = iconSize * 0.1; // KOS: DockWeatherWidget.qml:12
     final cardWidth = iconSize * metrics.infoUnits + backgroundGap * 2; // :42
     final compact = iconSize < kDockClockCompactThreshold; // :14 同 32 阈值
@@ -49,7 +44,7 @@ class DockWeatherCard extends StatelessWidget {
         alignment: Alignment.center,
         children: [
           // 卡背：KOS weatherCode 渐变（DockWeatherWidget.qml:45-63 +
-          // backgroundStart/End :19-40）→ 语义 panelGradient（记 deltas）；
+          // backgroundStart/End :19-40），按天气状态横向变化；
           // 装饰层（云/太阳/雨 :69-157）省略。
           Positioned(
             top: -backgroundGap,
@@ -60,9 +55,9 @@ class DockWeatherCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(
                   iconSize * kDockInfoCardRadiusRatio,
                 ),
-                gradient: context.shellTheme.panelGradient(
-                  colors.panelBackground,
-                  colors.panelBackgroundBottom,
+                gradient: dockWeatherGradient(
+                  snapshot.weatherCode,
+                  isDay: snapshot.isDay,
                 ),
               ),
             ),
@@ -93,7 +88,8 @@ class _FullRow extends StatelessWidget {
   Widget build(BuildContext context) {
     final metrics = DockMetricsScope.of(context);
     final iconSize = metrics.iconSize;
-    final colors = context.shellColors;
+    // This card owns a translucent weather artwork backdrop in every mode.
+    const ink = Color(0xFFFFFFFF);
     final symbol = dockWeatherConditionSymbol(
       snapshot.weatherCode,
       isDay: snapshot.isDay,
@@ -116,7 +112,7 @@ class _FullRow extends StatelessWidget {
               maxLines: 1,
               textAlign: TextAlign.center,
               style: TextStyle(
-                color: colors.textPrimary,
+                color: ink,
                 // KOS: :175 `pixelSize: Math.round(iconSize * 0.70)`。
                 fontSize: (iconSize * 0.70).roundToDouble(),
                 height: 1.0,
@@ -133,7 +129,7 @@ class _FullRow extends StatelessWidget {
                   snapshot.temperature,
                   maxLines: 1,
                   style: TextStyle(
-                    color: colors.textPrimary,
+                    color: ink,
                     // KOS: :185 `pixelSize: Math.max(16, iconSize * 0.42)`
                     // Bold。
                     fontSize: math.max(16, iconSize * 0.42),
@@ -147,7 +143,7 @@ class _FullRow extends StatelessWidget {
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis, // KOS: :186 elide
                   style: TextStyle(
-                    color: colors.textPrimary.withValues(alpha: 0.75), // :186
+                    color: ink.withValues(alpha: 0.75), // :186
                     fontSize: math.max(9, iconSize * 0.20),
                     height: 1.0,
                   ),
@@ -168,7 +164,7 @@ class _FullRow extends StatelessWidget {
                   style: TextStyle(
                     // KOS: :198-205 opacity 0.88、pixelSize max(8,
                     // iconSize*0.19)。
-                    color: colors.textPrimary.withValues(alpha: 0.88),
+                    color: ink.withValues(alpha: 0.88),
                     fontSize: math.max(8, iconSize * 0.19),
                     height: 1.0,
                   ),
@@ -180,7 +176,7 @@ class _FullRow extends StatelessWidget {
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     // KOS: :206-213 opacity 0.74。
-                    color: colors.textPrimary.withValues(alpha: 0.74),
+                    color: ink.withValues(alpha: 0.74),
                     fontSize: math.max(8, iconSize * 0.19),
                     height: 1.0,
                   ),
@@ -203,7 +199,8 @@ class _CompactRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final iconSize = DockMetricsScope.of(context).iconSize;
-    final colors = context.shellColors;
+    // This card owns a translucent weather artwork backdrop in every mode.
+    const ink = Color(0xFFFFFFFF);
     return Row(
       mainAxisAlignment: MainAxisAlignment.center,
       children: [
@@ -213,7 +210,7 @@ class _CompactRow extends StatelessWidget {
             isDay: snapshot.isDay,
           ),
           style: TextStyle(
-            color: colors.textPrimary,
+            color: ink,
             // KOS: :228 `pixelSize: Math.max(9, Math.round(iconSize*0.55))`。
             fontSize: math.max(9, (iconSize * 0.55).roundToDouble()),
             height: 1.0,
@@ -226,7 +223,7 @@ class _CompactRow extends StatelessWidget {
         Text(
           snapshot.temperature,
           style: TextStyle(
-            color: colors.textPrimary,
+            color: ink,
             fontSize: math.max(9, (iconSize * 0.48).roundToDouble()), // :235
             fontWeight: FontWeight.w600,
             height: 1.0,
@@ -235,7 +232,7 @@ class _CompactRow extends StatelessWidget {
         Text(
           ' · 体感 ${snapshot.apparentTemperature}', // KOS: :240
           style: TextStyle(
-            color: colors.textPrimary.withValues(alpha: 0.68), // :242
+            color: ink.withValues(alpha: 0.68), // :242
             fontSize: math.max(6, (iconSize * 0.28).roundToDouble()),
             fontWeight: FontWeight.w500,
             height: 1.0,
@@ -244,4 +241,49 @@ class _CompactRow extends StatelessWidget {
       ],
     );
   }
+}
+
+/// NextKde weather artwork palette (DockWeatherWidget.qml:19–40).
+LinearGradient dockWeatherGradient(int code, {required bool isDay}) {
+  final (Color start, Color end) = switch (code) {
+    0 =>
+      isDay
+          ? (
+              const Color.fromRGBO(46, 138, 240, 0.58),
+              const Color.fromRGBO(255, 184, 77, 0.42),
+            )
+          : (
+              const Color.fromRGBO(26, 38, 97, 0.66),
+              const Color.fromRGBO(92, 107, 179, 0.38),
+            ),
+    1 || 2 => (
+      const Color.fromRGBO(92, 148, 194, 0.56),
+      const Color.fromRGBO(224, 230, 232, 0.46),
+    ),
+    3 => (
+      const Color.fromRGBO(89, 110, 133, 0.62),
+      const Color.fromRGBO(235, 240, 242, 0.48),
+    ),
+    45 || 48 => (
+      const Color.fromRGBO(97, 115, 125, 0.60),
+      const Color.fromRGBO(209, 217, 217, 0.44),
+    ),
+    >= 51 && <= 67 => (
+      const Color.fromRGBO(51, 89, 125, 0.64),
+      const Color.fromRGBO(148, 173, 186, 0.40),
+    ),
+    >= 71 && <= 86 => (
+      const Color.fromRGBO(138, 173, 199, 0.58),
+      const Color.fromRGBO(240, 250, 255, 0.50),
+    ),
+    >= 95 => (
+      const Color.fromRGBO(61, 59, 102, 0.70),
+      const Color.fromRGBO(145, 138, 184, 0.46),
+    ),
+    _ => (
+      const Color.fromRGBO(82, 112, 148, 0.58),
+      const Color.fromRGBO(194, 209, 219, 0.42),
+    ),
+  };
+  return LinearGradient(colors: [start, end]);
 }

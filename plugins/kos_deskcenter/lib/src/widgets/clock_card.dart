@@ -23,6 +23,8 @@
 /// 源文件行号均指 `/home/wwt/文档/NextKde/shell/desktop/modules/` 相对路径。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -58,18 +60,10 @@ final class KosClockColors {
     this.timerIcon = const Color(0xFF171717), // 倒计时图标 ink
   });
 
-  /// 按 ShellTheme 取默认色板（替换按 Material `Theme.brightness` 的
-  /// forBrightness——插件表面下没有 MaterialApp/Theme 祖先，Theme.of 恒
-  /// 回退 light 基线，真实亮度取 `context.shellTheme.brightness`）：
-  /// - 亮壳 → 源 ownColor 深色刻度/数字 + 主题 accent 系指针（:683-690
-  ///   material 分支近似：hour/minute → textSecondary、second → accent、
-  ///   hub → accent）；
-  /// - 暗壳 → 白系（glassContentColor 近似）：刻度/数字/三根指针/hub/计时
-  ///   图标全部白（源端在 `if (isMaterial)` 外不覆盖 strokeStyle，
-  ///   :683/:686 沿用前一笔 = ink，见 visual-deltas §6）；仅秒针与 hub
-  ///   保留源端 accent `#ee7659`（:689-690）。
+  /// 透明桌面材质采用 NextKde 白色 backdrop ink；不透明模式采用壳色板。
+  /// 此解析只影响卡片内容，不修改详情面板、菜单或卡片表面材质。
   static KosClockColors forShell(ShellThemeData theme) {
-    if (theme.brightness == Brightness.dark) {
+    if (usesBackdropInk(theme) || theme.brightness == Brightness.dark) {
       return const KosClockColors(
         faceRing: Color(0x6BFFFFFF), // :651 glassContentColor(0.42)
         ink: Color(0xFFFFFFFF), // :655 glassContentColor()
@@ -83,7 +77,7 @@ final class KosClockColors {
     }
     return KosClockColors(
       hourHand: theme.accent, // :684 colors.primary → shell accent
-      minuteHand: theme.colors.textSecondary, // :687 colors.tertiary 系
+      minuteHand: backdropSecondaryInk(theme), // :687 colors.tertiary 系
       secondHand: theme.accent, // :689 accent(...,\"#ee7659\") → shell accent
       hub: theme.accent, // :690 accent(primary,...) → shell accent
     );

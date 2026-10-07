@@ -51,17 +51,21 @@ final class DockInfoContent {
   final List<DockInfoRow> rows;
 
   /// KOS 高度公式：`rowCount*26 + 62`（DockInfoPopup.qml:28）。
-  static double heightFor(int rowCount) =>
-      rowCount <= 0 ? 1 : rowCount * kDockInfoPopupRowHeight + kDockInfoPopupBaseHeight;
+  static double heightFor(int rowCount) => rowCount <= 0
+      ? 1
+      : rowCount * kDockInfoPopupRowHeight + kDockInfoPopupBaseHeight;
 }
 
 /// 信息卡详情面板（玻璃，radius 18）：标题行 + 分隔线 + 键值行。
 /// 视觉对齐 `DockMenuPanel` 的 panelGradient + hairlineSoft + BackdropBlur
 /// 三段式（dock_menu.dart:49-74 同构）。
 class DockInfoPanel extends StatelessWidget {
-  const DockInfoPanel({required this.content, super.key});
+  const DockInfoPanel({required this.content, this.progress = 1, super.key});
 
   final DockInfoContent content;
+
+  /// Fade the foreground only; keep backdrop sampling at full strength.
+  final double progress;
 
   @override
   Widget build(BuildContext context) {
@@ -74,99 +78,103 @@ class DockInfoPanel extends StatelessWidget {
       blur: theme.backdropBlurEnabled,
       separateChild: true,
       borderRadius: radius,
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          borderRadius: radius,
-          gradient: theme.panelGradient(
-            colors.panelBackground,
-            colors.panelBackgroundBottom,
-          ),
-          border: Border.all(color: colors.hairlineSoft),
-        ),
-        child: SizedBox(
-          width: kDockInfoPopupWidth, // KOS: :27 `implicitWidth: 288`
-          height: DockInfoContent.heightFor(content.rows.length),
-          child: Padding(
-            // KOS: :140-147 anchors 四边 margin 16/16/12/12。
-            padding: const EdgeInsets.fromLTRB(
-              kDockInfoPopupPaddingH,
-              kDockInfoPopupPaddingV,
-              kDockInfoPopupPaddingH,
-              kDockInfoPopupPaddingV,
+      child: Opacity(
+        opacity: progress,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            borderRadius: radius,
+            gradient: theme.panelGradient(
+              colors.panelBackground,
+              colors.panelBackgroundBottom,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Text(
-                      content.title,
-                      style: TextStyle(
-                        color: colors.textPrimary,
-                        // KOS: :154-161 14px DemiBold。
-                        fontSize: kDockInfoPopupTitleSize,
-                        fontWeight: FontWeight.w600,
-                        height: 1.0,
-                      ),
-                    ),
-                    if (content.scope != null) ...[
-                      const SizedBox(width: 8), // KOS: :152 `spacing: 8`
+            border: Border.all(color: colors.hairlineSoft),
+          ),
+          child: SizedBox(
+            width: kDockInfoPopupWidth, // KOS: :27 `implicitWidth: 288`
+            height: DockInfoContent.heightFor(content.rows.length),
+            child: Padding(
+              // KOS: :140-147 anchors 四边 margin 16/16/12/12。
+              padding: const EdgeInsets.fromLTRB(
+                kDockInfoPopupPaddingH,
+                kDockInfoPopupPaddingV,
+                kDockInfoPopupPaddingH,
+                kDockInfoPopupPaddingV,
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
                       Text(
-                        content.scope!,
+                        content.title,
                         style: TextStyle(
-                          // KOS: :163-173 opacity 0.62、11px Medium。
-                          color: colors.textPrimary.withValues(
-                            alpha: kDockInfoPopupLabelAlpha,
-                          ),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w500,
+                          color: colors.textPrimary,
+                          // KOS: :154-161 14px DemiBold。
+                          fontSize: kDockInfoPopupTitleSize,
+                          fontWeight: FontWeight.w600,
                           height: 1.0,
                         ),
                       ),
-                    ],
-                  ],
-                ),
-                // KOS: :148 — 标题块与分隔线的间距走 Column spacing 6。
-                const SizedBox(height: kDockInfoPopupRowSpacing),
-                Container(
-                  height: 1,
-                  // KOS: :178-183 `foregroundColor` opacity 0.12。
-                  color: colors.textPrimary.withValues(alpha: 0.12),
-                ),
-                const SizedBox(height: kDockInfoPopupRowSpacing),
-                for (final row in content.rows)
-                  SizedBox(
-                    // KOS: :191 `Layout.preferredHeight: 20`（行高 26 =
-                    // 20 + spacing 6 由 SizedBox+padding 等效——此处直接
-                    // 26 行高记 deltas）。
-                    height: kDockInfoPopupRowHeight,
-                    child: Row(
-                      children: [
+                      if (content.scope != null) ...[
+                        const SizedBox(width: 8), // KOS: :152 `spacing: 8`
                         Text(
-                          row.label,
+                          content.scope!,
                           style: TextStyle(
+                            // KOS: :163-173 opacity 0.62、11px Medium。
                             color: colors.textPrimary.withValues(
                               alpha: kDockInfoPopupLabelAlpha,
-                            ), // KOS: :194-202 12px@0.62
-                            fontSize: kDockInfoPopupLabelSize,
+                            ),
+                            fontSize: 11,
                             fontWeight: FontWeight.w500,
                             height: 1.0,
                           ),
                         ),
-                        const Spacer(),
-                        Text(
-                          row.value,
-                          style: TextStyle(
-                            color: colors.textPrimary,
-                            fontSize: kDockInfoPopupValueSize, // KOS: :205-212
-                            fontWeight: FontWeight.w600,
-                            height: 1.0,
-                          ),
-                        ),
                       ],
-                    ),
+                    ],
                   ),
-              ],
+                  // KOS: :148 — 标题块与分隔线的间距走 Column spacing 6。
+                  const SizedBox(height: kDockInfoPopupRowSpacing),
+                  Container(
+                    height: 1,
+                    // KOS: :178-183 `foregroundColor` opacity 0.12。
+                    color: colors.textPrimary.withValues(alpha: 0.12),
+                  ),
+                  const SizedBox(height: kDockInfoPopupRowSpacing),
+                  for (final row in content.rows)
+                    SizedBox(
+                      // KOS: :191 `Layout.preferredHeight: 20`（行高 26 =
+                      // 20 + spacing 6 由 SizedBox+padding 等效——此处直接
+                      // 26 行高记 deltas）。
+                      height: kDockInfoPopupRowHeight,
+                      child: Row(
+                        children: [
+                          Text(
+                            row.label,
+                            style: TextStyle(
+                              color: colors.textPrimary.withValues(
+                                alpha: kDockInfoPopupLabelAlpha,
+                              ), // KOS: :194-202 12px@0.62
+                              fontSize: kDockInfoPopupLabelSize,
+                              fontWeight: FontWeight.w500,
+                              height: 1.0,
+                            ),
+                          ),
+                          const Spacer(),
+                          Text(
+                            row.value,
+                            style: TextStyle(
+                              color: colors.textPrimary,
+                              fontSize:
+                                  kDockInfoPopupValueSize, // KOS: :205-212
+                              fontWeight: FontWeight.w600,
+                              height: 1.0,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                ],
+              ),
             ),
           ),
         ),
@@ -272,17 +280,15 @@ class DockInfoOverlay extends StatelessWidget {
                       offset: Offset(0, (1 - v) * kDockMenuEnterOffset),
                       child: Transform.scale(
                         scale:
-                            kDockMenuEnterScale +
-                            (1 - kDockMenuEnterScale) * v,
+                            kDockMenuEnterScale + (1 - kDockMenuEnterScale) * v,
                         alignment: Alignment.bottomCenter,
-                        child: Opacity(opacity: v, child: child),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(maxHeight: maxHeight),
+                          child: DockInfoPanel(content: content, progress: v),
+                        ),
                       ),
                     );
                   },
-                  child: ConstrainedBox(
-                    constraints: BoxConstraints(maxHeight: maxHeight),
-                    child: DockInfoPanel(content: content),
-                  ),
                 ),
               ),
             ),

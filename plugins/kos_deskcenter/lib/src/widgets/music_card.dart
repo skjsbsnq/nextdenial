@@ -50,6 +50,8 @@
 /// 源文件行号均指 `/home/wwt/文档/NextKde/shell/desktop/modules/` 相对根。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'dart:math' as math;
 import 'dart:typed_data';
 
@@ -90,39 +92,35 @@ final class KosMusicCardColors {
     this.wavyTrack = const Color(0x3DFFFFFF), // colors.outlineVariant :1908
   });
 
-  /// 按 ShellTheme 取默认色板（替换 `forBrightness`——插件表面下没有
-  /// MaterialApp/Theme 祖先，Theme.of 恒回退 light；亮度/色板走 shell）：
-  /// - 文字 `ink`/`controlInk` → shell `textPrimary`；
-  ///   `subInk`/`timeInk`/`noteInk` → shell `textSecondary`；
-  /// - 控制钮：`controlFillPrimary`（播放主钮填充）→ `accentPalette.container`、
-  ///   `controlInkPrimary`（其上图标）→ `accentPalette.onContainer`；
-  ///   其余钮 `controlFill` → `accentPalette.subtle`；
-  /// - 进度：暗壳平坦条 `progressTrack`/`progressFill` → `textPrimary`@0.20/0.82；
-  ///   亮壳 WavyProgress `wavyActive` → `theme.accent`、`wavyTrack` →
-  ///   `hairlineSoft`；
-  /// - `isMaterial` → `theme.brightness == Brightness.light`（亮壳=material 档
-  ///   WavyProgress，暗壳=onBackdrop 平坦条），驱动几何而非亮度近似。
+  /// 透明桌面材质采用 NextKde 白色 backdrop ink；不透明模式采用壳色板。
+  /// 此解析只影响卡片内容，不修改详情面板、菜单或卡片表面材质。
   static KosMusicCardColors forShell(ShellThemeData theme) {
-    final colors = theme.colors;
     final accent = theme.accentPalette;
-    final light = theme.brightness == Brightness.light;
+    final light =
+        !usesBackdropInk(theme) && theme.brightness == Brightness.light;
     return KosMusicCardColors(
       isMaterial: light,
-      ink: colors.textPrimary,
-      subInk: colors.textSecondary,
-      timeInk: colors.textSecondary,
-      noteInk: colors.textSecondary,
-      controlInk: colors.textPrimary, // 非主钮图标（:1971-1973）
-      controlInkPrimary: accent.onContainer, // 主钮图标压 accent 容器
-      controlFillPrimary: accent.container, // :20 primaryContainer → accent 容器
-      controlFill: accent.subtle, // :20 secondaryContainer → accent subtle
-      progressTrack: colors.textPrimary.withValues(alpha: 0.20), // :1917
-      progressFill: colors.textPrimary.withValues(alpha: 0.82), // :1924
+      ink: backdropInk(theme),
+      subInk: backdropSecondaryInk(theme),
+      timeInk: backdropSecondaryInk(theme),
+      noteInk: backdropSecondaryInk(theme),
+      controlInk: backdropInk(theme), // 非主钮图标（:1971-1973）
+      controlInkPrimary: usesBackdropInk(theme)
+          ? backdropInk(theme)
+          : accent.onContainer, // 主钮图标压 accent 容器
+      controlFillPrimary: usesBackdropInk(theme)
+          ? backdropInk(theme).withValues(alpha: 0.20)
+          : accent.container, // :20 primaryContainer → accent 容器
+      controlFill: usesBackdropInk(theme)
+          ? backdropInk(theme).withValues(alpha: 0.09)
+          : accent.subtle, // :20 secondaryContainer → accent subtle
+      progressTrack: backdropInk(theme).withValues(alpha: 0.20), // :1917
+      progressFill: backdropInk(theme).withValues(alpha: 0.82), // :1924
       // :1850 空态「♫」占位符是 live 墨色——暗壳白@0.46 在亮壳不可见；
       // 走 textSecondary 并保留 0.46 alpha（暗壳同样成立）。
-      placeholderNote: colors.textSecondary.withValues(alpha: 0.46),
+      placeholderNote: backdropSecondaryInk(theme).withValues(alpha: 0.46),
       wavyActive: theme.accent, // :1907 colors.primary → shell accent
-      wavyTrack: colors.hairlineSoft, // :1908 outlineVariant → hairlineSoft
+      wavyTrack: backdropHairline(theme), // :1908 outlineVariant → hairlineSoft
     );
   }
 
@@ -254,7 +252,8 @@ class _KosMusicCardState extends ConsumerState<KosMusicCard>
         ? ref.watch(commandsListenable)
         : null;
 
-    final colors = widget.colors ?? KosMusicCardColors.forShell(context.shellTheme);
+    final colors =
+        widget.colors ?? KosMusicCardColors.forShell(context.shellTheme);
 
     final hasPlayer = media?.available ?? false; // :1707 hasPlayer
     // :1713-1716 safeLength/progress：lengthSupported && length>0。

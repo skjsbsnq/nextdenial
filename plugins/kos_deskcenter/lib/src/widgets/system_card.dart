@@ -36,6 +36,9 @@
 ///
 /// 源文件行号均指 `/home/wwt/文档/NextKde/shell/desktop/modules/` 相对根。
 library;
+
+import '../theme/backdrop_content.dart';
+
 import 'dart:math' as math;
 
 import 'package:denial_flutter_sdk/services.dart';
@@ -179,26 +182,29 @@ final class KosSystemCardColors {
     ), // accent(secondary,\"#64d2ff\") :1503
   });
 
-  /// 按 ShellTheme 取默认色板（替换按 Material `Theme.brightness` 的
-  /// pick 分叉——插件表面下没有 MaterialApp/Theme 祖先，Theme.of 恒回退
-  /// light 基线）：
-  /// - 详情/标签/温度副文字 → shell `textSecondary`（保留各自 alpha 区分）；
-  /// - `divider`/`ringTrack` → shell `hairlineSoft`（低对比分隔/轨道）；
-  /// - 三环色 `ringCpu/Memory/Storage`、悬停激活色 `memoryActiveInk`/
-  ///   `cpuActiveInk`、趋势线 `memoryLine`/`cpuLine`/`frequencyLine` 为
-  ///   数据/语义色，保留源值不走壳色板。
+  /// 透明桌面材质采用 NextKde 白色 backdrop ink；不透明模式采用壳色板。
+  /// 此解析只影响卡片内容，不修改详情面板、菜单或卡片表面材质。
   static KosSystemCardColors forShell(ShellThemeData theme) {
-    final colors = theme.colors;
+    final ink = backdropInk(theme);
+    final onBackdrop = usesBackdropInk(theme);
     return KosSystemCardColors(
-      ringTrack: colors.hairlineSoft, // :1306 outlineVariant@0.12 → hairlineSoft
-      detailInk: colors.textSecondary, // :1353/:1360 ink
-      labelInk: colors.textSecondary.withValues(
-        alpha: 0.78,
-      ), // :1457 ink(…,0.78)
-      divider: colors.hairlineSoft, // :1424 rgba(…,0.12) → hairlineSoft
-      tempSubInk: colors.textSecondary.withValues(
-        alpha: 0.72,
-      ), // :1417 ink(…,0.72)
+      ringCpu: onBackdrop ? ink : const Color(0xFFFF375F),
+      ringMemory: onBackdrop ? ink : const Color(0xFF30D158),
+      ringStorage: onBackdrop ? ink : const Color(0xFF64D2FF),
+      memoryLine: onBackdrop ? ink : const Color(0xFF30D158),
+      cpuLine: onBackdrop ? ink : const Color(0xFFFF375F),
+      frequencyLine: onBackdrop ? ink : const Color(0xFF64D2FF),
+      memoryActiveInk: onBackdrop ? ink : const Color(0xFF30D158),
+      cpuActiveInk: onBackdrop ? ink : const Color(0xFFFF375F),
+      ringTrack: backdropHairline(
+        theme,
+      ), // :1306 outlineVariant@0.12 → hairlineSoft
+      detailInk: backdropSecondaryInk(theme), // :1353/:1360 ink
+      labelInk: backdropSecondaryInk(theme)
+          .withValues(alpha: 0.78), // :1457 ink(…,0.78)
+      divider: backdropHairline(theme), // :1424 rgba(…,0.12) → hairlineSoft
+      tempSubInk: backdropSecondaryInk(theme)
+          .withValues(alpha: 0.72), // :1417 ink(…,0.72)
     );
   }
 
@@ -265,13 +271,18 @@ class KosSystemCard extends ConsumerWidget {
     final cpuSeries = listenable != null
         ? ref.watch(listenable)
         : LoadSeries.empty;
-    final colors = this.colors ?? KosSystemCardColors.forShell(context.shellTheme);
+    final colors =
+        this.colors ?? KosSystemCardColors.forShell(context.shellTheme);
     return DeskCard(
       size: size,
       editMode: editMode,
       onRemove: onRemove,
       onCycleSize: onCycleSize,
-      child: _SystemCardBody(cpuSeries: cpuSeries, metrics: metrics, colors: colors),
+      child: _SystemCardBody(
+        cpuSeries: cpuSeries,
+        metrics: metrics,
+        colors: colors,
+      ),
     );
   }
 }

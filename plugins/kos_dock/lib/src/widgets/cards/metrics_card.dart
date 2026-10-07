@@ -2,13 +2,8 @@
 ///
 /// 移植 NextKde `shell/desktop/modules/dock/DockTemperatureWidget.qml`（行号在
 /// 各段标注）：
-/// - full（iconSize≥32）：左列温度计 glyph + 「平均温度/最高温度」两行
-///   （accent 点 `#64d2ff`/`#ff6b62` → `colors.textSecondary`/`performanceBad`
-///   语义映射，记 deltas），右列三环 CustomPaint——外 CPU `#ff375f`、中
-///   memory `#30d158`、内 storage `#64d2ff`（KOS 语义环色字面保留，
-///   任务卡批准 + `dock_tokens.dart` 注释行号），半径比 0.39/0.285/0.18、
-///   环宽 `max(2.4, w*0.075)`、track `Qt.rgba(0.19,0.17,0.2,0.16)` →
-///   `textPrimary` @0.16（:196-232）；
+/// - full（iconSize≥32）：白色温度计 + 两行温度和原色 accent 点，
+///   右列三色 CPU / memory / storage 活动环；
 /// - compact（iconSize<32）：`glyph + 平均° · 峰值°` 单行（:238-273）；
 /// - `available = currentMilliC>=0 && maximum5MinuteMilliC>=0`（:20-21）→
 ///   [DockMetricsSnapshot.temperatureAvailable]；不可用显 `--°`（:156-157）。
@@ -18,20 +13,43 @@
 /// CPU 不重复 /proc/stat 差分（记 deltas）。
 ///
 /// 偏差（记 docs/visual-deltas.md）：
-/// - 卡背 thermalColor 渐变（:38-69，随温度蓝→红字面 RGBA）→
-///   `panelGradient(panelBackground, panelBackgroundBottom)`；
+/// - 卡背 thermalColor 横向渐变按温度由蓝变橙红（:38-69）；
 /// - KOS 页内嵌 `TemperatureSensorPopups`（:278-281，传感器 dashboard）无对应
 ///   组件 → hover/点击走通用 DockInfoPopup（carousel 层统一处理）。
 library;
 
 import 'dart:math' as math;
 
-import 'package:denial_flutter_sdk/shell_theme.dart'
-    show ShellThemeBuildContext;
 import 'package:flutter/material.dart';
 
 import '../../data/dock_metrics.dart';
 import '../../theme/dock_tokens.dart';
+
+/// NextKde thermal artwork: cool blue at 35°C, warm orange at 90°C.
+LinearGradient dockMetricsGradient(DockMetricsSnapshot? snapshot) {
+  final available = snapshot?.temperatureAvailable ?? false;
+  final warmth = available
+      ? ((snapshot!.currentMilliC / 1000 - 35) / 55).clamp(0.0, 1.0)
+      : 0.25;
+  Color tone(Color cool, Color warm, double alpha) =>
+      Color.lerp(cool, warm, warmth)!.withValues(alpha: alpha);
+  return LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [
+      tone(
+        const Color.fromRGBO(41, 97, 158, 1),
+        const Color.fromRGBO(173, 56, 46, 1),
+        0.68,
+      ),
+      tone(
+        const Color.fromRGBO(51, 143, 173, 1),
+        const Color.fromRGBO(245, 133, 46, 1),
+        0.54,
+      ),
+    ],
+  );
+}
 
 /// KOS `DockTemperatureWidget`（carousel 页）。快照缺省（collector 尚未采样）
 /// → `temperatureAvailable=false`，温度显 `--°`、三环按 0 绘制——KOS 同式
@@ -63,7 +81,6 @@ class DockMetricsCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final metrics = DockMetricsScope.of(context);
     final iconSize = metrics.iconSize;
-    final colors = context.shellColors;
     final backgroundGap = iconSize * 0.1; // KOS: DockTemperatureWidget.qml:17
     final cardWidth = iconSize * metrics.infoUnits + backgroundGap * 2; // :35
     final compact = iconSize < kDockClockCompactThreshold; // :19 同 32 阈值
@@ -74,8 +91,7 @@ class DockMetricsCard extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // 卡背：KOS thermalColor 蓝→红渐变（DockTemperatureWidget.qml:48-69）
-          // → 语义 panelGradient（记 deltas）。
+          // NextKde 的温度驱动横向卡背（:48-69）。
           Positioned(
             top: -backgroundGap,
             bottom: -backgroundGap,
@@ -85,10 +101,7 @@ class DockMetricsCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(
                   iconSize * kDockInfoCardRadiusRatio,
                 ),
-                gradient: context.shellTheme.panelGradient(
-                  colors.panelBackground,
-                  colors.panelBackgroundBottom,
-                ),
+                gradient: dockMetricsGradient(snapshot),
               ),
             ),
           ),
@@ -162,7 +175,7 @@ class _FullRow extends StatelessWidget {
                   // material thermostat glyph 近似（记 deltas）。
                   Icons.thermostat,
                   size: (iconSize * 0.42).roundToDouble(),
-                  color: context.shellColors.textPrimary,
+                  color: Colors.white,
                 ),
                 SizedBox(
                   // KOS: :105 `leftMargin: Math.max(3, round(iconSize*0.09))`。
@@ -175,18 +188,16 @@ class _FullRow extends StatelessWidget {
                         child: _TemperatureRow(
                           label: '平均温度', // KOS: :114
                           celsius: currentC,
-                          // KOS accent `#64d2ff`（:115）→ textSecondary
-                          // 语义映射（记 deltas；CONSTRAINTS §3 禁硬编码）。
-                          accent: context.shellColors.textSecondary,
+                          // NextKde cyan temperature accent (:115).
+                          accent: const Color(0xFF64D2FF),
                         ),
                       ),
                       Expanded(
                         child: _TemperatureRow(
                           label: '最高温度', // KOS: :116
                           celsius: peakC,
-                          // KOS accent `#ff6b62`（:117）→ performanceBad
-                          // 语义映射（记 deltas）。
-                          accent: context.shellColors.performanceBad,
+                          // NextKde coral peak-temperature accent (:117).
+                          accent: const Color(0xFFFF6B62),
                         ),
                       ),
                     ],
@@ -212,10 +223,12 @@ class _FullRow extends StatelessWidget {
                     cpuValue: cpuValue,
                     memoryValue: memoryValue,
                     storageValue: storageValue,
-                    trackColor: context.shellColors.textPrimary.withValues(
-                      // KOS: :205 track `Qt.rgba(0.19,0.17,0.2,0.16)` →
-                      // textPrimary 低 alpha 近似（记 deltas）。
+                    // KOS :205 keeps the unfilled activity track dark.
+                    trackColor: const Color.from(
                       alpha: 0.16,
+                      red: 0.19,
+                      green: 0.17,
+                      blue: 0.20,
                     ),
                   ),
                 ),
@@ -246,7 +259,7 @@ class _TemperatureRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final iconSize = DockMetricsScope.of(context).iconSize;
-    final colors = context.shellColors;
+    const ink = Colors.white;
     return Row(
       children: [
         Container(
@@ -267,7 +280,7 @@ class _TemperatureRow extends StatelessWidget {
             style: TextStyle(
               // KOS: :135-149 opacity 0.82、pixelSize max(9,
               // round(iconSize*0.21)) Medium。
-              color: colors.textPrimary.withValues(alpha: 0.82),
+              color: ink.withValues(alpha: 0.82),
               fontSize: math.max(9, (iconSize * 0.21).roundToDouble()),
               fontWeight: FontWeight.w500,
               height: 1.0,
@@ -277,7 +290,7 @@ class _TemperatureRow extends StatelessWidget {
         Text(
           celsius >= 0 ? '$celsius°' : '--°', // KOS: :156-157
           style: TextStyle(
-            color: colors.textPrimary,
+            color: ink,
             // KOS: :151-165 pixelSize max(11, round(iconSize*0.27))
             // DemiBold。
             fontSize: math.max(11, (iconSize * 0.27).roundToDouble()),
@@ -299,7 +312,7 @@ class _CompactRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final iconSize = DockMetricsScope.of(context).iconSize;
-    final colors = context.shellColors;
+    const ink = Colors.white;
     final available = snapshot?.temperatureAvailable ?? false;
     final currentC = available ? (snapshot!.currentMilliC / 1000).round() : -1;
     final peakC = available
@@ -312,7 +325,7 @@ class _CompactRow extends StatelessWidget {
           Icons.thermostat,
           // KOS: :245 `Math.max(9, Math.round(iconSize*0.52))`。
           size: math.max(9, (iconSize * 0.52).roundToDouble()),
-          color: colors.textPrimary,
+          color: ink,
         ),
         SizedBox(
           // KOS: :242 `spacing: Math.max(2, Math.round(iconSize*0.10))`。
@@ -321,7 +334,7 @@ class _CompactRow extends StatelessWidget {
         Text(
           currentC >= 0 ? '$currentC°' : '--°', // KOS: :252
           style: TextStyle(
-            color: colors.textPrimary,
+            color: ink,
             fontSize: math.max(9, (iconSize * 0.48).roundToDouble()), // :257
             fontWeight: FontWeight.w600,
             height: 1.0,
@@ -330,7 +343,7 @@ class _CompactRow extends StatelessWidget {
         Text(
           ' · 峰值 ${peakC >= 0 ? '$peakC°' : '--°'}', // KOS: :262-263
           style: TextStyle(
-            color: colors.textPrimary.withValues(alpha: 0.68), // :265
+            color: ink.withValues(alpha: 0.68), // :265
             fontSize: math.max(6, (iconSize * 0.28).roundToDouble()),
             fontWeight: FontWeight.w500,
             height: 1.0,
@@ -397,7 +410,11 @@ final class DockMetricsRingsPainter extends CustomPainter {
 
     // KOS: :219-221 外 CPU / 中 memory / 内 storage（半径比 0.39/0.285/0.18）。
     drawRing(kDockMetricsRingOuterRatio, cpuValue, kDockMetricsRingCpuColor);
-    drawRing(kDockMetricsRingMidRatio, memoryValue, kDockMetricsRingMemoryColor);
+    drawRing(
+      kDockMetricsRingMidRatio,
+      memoryValue,
+      kDockMetricsRingMemoryColor,
+    );
     drawRing(
       kDockMetricsRingInnerRatio,
       storageValue,

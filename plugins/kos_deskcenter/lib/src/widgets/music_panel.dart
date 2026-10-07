@@ -25,6 +25,8 @@
 /// (250ms)` 驱动 `positionAt(now)` 重算（暂停/无播放停表，dispose 取消）。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 import 'dart:typed_data';
@@ -146,7 +148,7 @@ class _MusicPanelState extends ConsumerState<MusicPanel> {
   Widget build(BuildContext context) {
     final theme = context.shellTheme;
     final colors = context.shellColors;
-    final palette = KosMusicCardColors.forShell(theme);
+    final palette = KosMusicCardColors.forShell(panelContentTheme(theme));
     final scope = context
         .dependOnInheritedWidgetOfExactType<ShellServicesScope>();
 

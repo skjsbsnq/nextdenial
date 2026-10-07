@@ -53,6 +53,8 @@
 /// 源文件行号均指 `/home/wwt/文档/NextKde/shell/desktop/modules/` 相对根。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'dart:math' as math;
 
 import 'package:denial_flutter_sdk/shell_theme.dart'
@@ -389,7 +391,9 @@ String _weatherCategory(int code) {
 /// glassContentColor 白系（暗玻璃白，IconAppearanceService.qml:67-78 静态
 final class KosWeatherCardColors {
   const KosWeatherCardColors({
-    this.ink = const Color(0xFFFFFFFF), // ink(\"white\") :1087/:1092/:1105/:1143
+    this.ink = const Color(
+      0xFFFFFFFF,
+    ), // ink(\"white\") :1087/:1092/:1105/:1143
     this.faintInk = const Color(0xBDFFFFFF), // 白@0.74 :1113
     this.subduedInk = const Color(0xB8FFFFFF), // 白@0.72 :1131
     this.forecastEmptyInk = const Color(0xA6FFFFFF), // 白@0.65 :1152
@@ -402,25 +406,21 @@ final class KosWeatherCardColors {
     this.cloudFront = const Color(0xCCFFFFFF),
   });
 
-  /// 按 ShellTheme 取默认色板（替换写死白系——亮壳下白-on-浅灰不可读；
-  /// 插件表面下没有 MaterialApp/Theme 祖先，真实亮度/墨色走 shell）：
-  /// - 文字 `ink` → shell `textPrimary`；`faintInk`/`subduedInk`/
-  ///   `forecastEmptyInk` → shell `textSecondary`，保留各自 alpha 区分；
-  /// - 天气图形（sunRay/raindrop/stormBolt/fogBand/snowFlake/cloudBack/
-  ///   cloudFront）：暗壳保留白系、亮壳改取 `textSecondary` 深基调，
-  ///   各字段相对 alpha 经 `withValues` 保留。
+  /// 透明桌面材质采用 NextKde 白色 backdrop ink；不透明模式采用壳色板。
+  /// 此解析只影响卡片内容，不修改详情面板、菜单或卡片表面材质。
   static KosWeatherCardColors forShell(ShellThemeData theme) {
-    final colors = theme.colors;
-    final light = theme.brightness == Brightness.light;
+    final light =
+        !usesBackdropInk(theme) && theme.brightness == Brightness.light;
     // 图形基色：暗壳白系、亮壳深墨（textSecondary）——保留各字段相对 alpha。
     Color graph(double alpha) => light
-        ? colors.textSecondary.withValues(alpha: alpha)
+        ? backdropSecondaryInk(theme).withValues(alpha: alpha)
         : Color(0xFFFFFFFF).withValues(alpha: alpha);
     return KosWeatherCardColors(
-      ink: colors.textPrimary, // 白 → textPrimary
-      faintInk: colors.textSecondary.withValues(alpha: 0.74), // :1113
-      subduedInk: colors.textSecondary.withValues(alpha: 0.72), // :1131
-      forecastEmptyInk: colors.textSecondary.withValues(alpha: 0.65), // :1152
+      ink: backdropInk(theme), // 白 → textPrimary
+      faintInk: backdropSecondaryInk(theme).withValues(alpha: 0.74), // :1113
+      subduedInk: backdropSecondaryInk(theme).withValues(alpha: 0.72), // :1131
+      forecastEmptyInk: backdropSecondaryInk(theme)
+          .withValues(alpha: 0.65), // :1152
       sunRay: graph(1.0), // :974/:980
       raindrop: graph(1.0), // :1032
       stormBolt: graph(0.68), // :1079-1080
@@ -508,10 +508,10 @@ class KosWeatherCard extends StatelessWidget {
     final code = snap?.weatherCode ?? -1; // WeatherService.qml:36
     final isDay = snap?.isDay ?? true; // :37
     final category = _weatherCategory(code);
-    final colors = this.colors ?? KosWeatherCardColors.forShell(context.shellTheme);
-    // accent 读 shell 文本次色（源 weatherTheme.accent，色艺渐变删除后
-    // 改用板上可读的 shell 角色）。
-    final accent = context.shellColors.textSecondary;
+    final colors =
+        this.colors ?? KosWeatherCardColors.forShell(context.shellTheme);
+    // 天气符号与正文共享内容色板（显式注入也保持一致）。
+    final accent = colors.ink;
     // 温度文案（WeatherService.qml:32-33）：round + \"°\"，缺失 \"--°\"。
     final temperature = snap == null || snap.currentTemp.isNaN
         ? '--°'

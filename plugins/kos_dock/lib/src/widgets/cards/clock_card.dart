@@ -1,18 +1,5 @@
-/// KOS Dock 信息卡——时钟页（TASK-05）。
-///
-/// 移植 NextKde `shell/desktop/modules/dock/DockClockWidget.qml`（行号在各段
-/// 标注；紧凑阈值/字号比常量在 `dock_tokens.dart` TASK-05 区段）：
-/// - full（iconSize≥32）：左列 60% 双行 `HH:mm:ss` + `yyyy年M月d日 周X`，
-///   右列 40% 日落/日出两行（DockClockWidget.qml:123-270）；
-/// - compact（iconSize<32）：单行 `glyph + HH:mm · 日落 --:--`（:272-306）。
-///
-/// 偏差（记 docs/visual-deltas.md）：
-/// - iOS 玻璃字形（ambientTexture/FastBlur/glyphSheen OpacityMask，:144-204）
-///   → `shellColors.textPrimary` 语义色；
-/// - 卡背壁纸 ambient 渐变（:96-121）→ `panelGradient(panelBackground,
-///   panelBackgroundBottom)`；
-/// - `services.clock` 不 tick（fake 恒值）时由 carousel 经 `Timer.periodic(1s)`
-///   自建驱动刷新 [DockClockCardData.now]。
+/// Dock 时钟页：秒级时间与短日期，完整日期和日出日落保留在详情中。
+/// 卡片沿用信息轮播的固定尺寸，轻透渐变与 Dock 玻璃融合。
 library;
 
 import 'dart:math' as math;
@@ -22,6 +9,31 @@ import 'package:denial_flutter_sdk/shell_theme.dart'
 import 'package:flutter/material.dart';
 
 import '../../theme/dock_tokens.dart';
+
+/// A restrained tint lets the Dock's existing glass remain visible.
+LinearGradient dockClockGradient(BuildContext context) {
+  final theme = context.shellTheme;
+  if (!theme.backdropBlurEnabled) {
+    return LinearGradient(
+      colors: [
+        theme.colors.panelBackground,
+        theme.colors.panelBackgroundBottom,
+      ],
+    );
+  }
+  return LinearGradient(
+    begin: Alignment.centerLeft,
+    end: Alignment.centerRight,
+    colors: [
+      Color.lerp(
+        const Color(0xFF263348),
+        theme.accentSeed,
+        0.22,
+      )!.withValues(alpha: 0.24),
+      const Color(0xFF263348).withValues(alpha: 0.12),
+    ],
+  );
+}
 
 /// 时钟卡的即时数据（由 carousel 从 `services.clock` 快照组装传入，
 /// 使卡体本身无 Provider 依赖、可在 pumpWidget 直接测试）。
@@ -52,7 +64,13 @@ class DockClockCard extends StatelessWidget {
   /// KOS `shortWeekday`（DockClockWidget.qml:37-39；weekday 1=周一 → 索引
   /// `weekday % 7`，周日=0）。
   static const List<String> _weekdays = [
-    '周日', '周一', '周二', '周三', '周四', '周五', '周六',
+    '周日',
+    '周一',
+    '周二',
+    '周三',
+    '周四',
+    '周五',
+    '周六',
   ];
 
   static String _two(int v) => v.toString().padLeft(2, '0');
@@ -77,7 +95,6 @@ class DockClockCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final metrics = DockMetricsScope.of(context);
     final iconSize = metrics.iconSize;
-    final colors = context.shellColors;
     final backgroundGap = iconSize * 0.1; // KOS: DockClockWidget.qml:20
     final cardWidth = iconSize * metrics.infoUnits + backgroundGap * 2; // :24
     final compact = iconSize < kDockClockCompactThreshold; // :22
@@ -88,8 +105,7 @@ class DockClockCard extends StatelessWidget {
       child: Stack(
         alignment: Alignment.center,
         children: [
-          // 卡背：KOS ambient 壁纸渐变（DockClockWidget.qml:96-121）→
-          // 语义 panelGradient；上下外延 backgroundGap（:99-101）。
+          // Ambient 横向渐变；上下外延 backgroundGap（:99-101）。
           Positioned(
             top: -backgroundGap,
             bottom: -backgroundGap,
@@ -99,17 +115,11 @@ class DockClockCard extends StatelessWidget {
                 borderRadius: BorderRadius.circular(
                   iconSize * kDockInfoCardRadiusRatio,
                 ),
-                gradient: context.shellTheme.panelGradient(
-                  colors.panelBackground,
-                  colors.panelBackgroundBottom,
-                ),
+                gradient: dockClockGradient(context),
               ),
             ),
           ),
-          // 紧凑行内容比卡宽时按比例缩进卡内（KOS 该行落在 carousel
-          // `clip` 内被直接裁切；本端 `scaleDown` 避免 debug 溢出横幅——
-          // 等宽/CJK 宽字形下 `glyph + HH:mm + · 日落 --:--` 会超卡宽，
-          // 记 docs/visual-deltas.md）。
+          // Preserve the fixed carousel slot even on narrow Dock sizes.
           if (compact)
             FittedBox(
               fit: BoxFit.scaleDown,
@@ -123,8 +133,8 @@ class DockClockCard extends StatelessWidget {
   }
 }
 
-/// full 布局（DockClockWidget.qml:123-270）：左列 60% 时间+日期、右列 40%
-/// 日落/日出。
+/// Keep the reading hierarchy simple at Dock scale. Detailed solar times are
+/// available in the existing popup rather than competing with the clock face.
 class _FullRows extends StatelessWidget {
   const _FullRows({required this.data});
 
@@ -134,138 +144,64 @@ class _FullRows extends StatelessWidget {
   Widget build(BuildContext context) {
     final metrics = DockMetricsScope.of(context);
     final iconSize = metrics.iconSize;
-    final colors = context.shellColors;
-    final backgroundGap = iconSize * 0.1;
-    // KOS: DockClockWidget.qml:127-129（宽 min(父宽-gap*2, iconSize*3.86)，
-    // 高 round(iconSize*0.88)）。
+    final theme = context.shellTheme;
+    final ink = theme.backdropBlurEnabled
+        ? Colors.white
+        : theme.colors.textPrimary;
     final rowWidth = math.min(
-      iconSize * metrics.infoUnits - backgroundGap * 2,
+      iconSize * (metrics.infoUnits - 0.4),
       iconSize * 3.86,
     );
     return SizedBox(
-      width: rowWidth,
-      height: (iconSize * 0.88).roundToDouble(),
-      child: Row(
-        children: [
-          SizedBox(
-            width: rowWidth * 0.60, // KOS: :133 `width * 0.60`
-            child: Column(
+      width: math.max(0, rowWidth),
+      height: iconSize * 0.88,
+      child: FittedBox(
+        fit: BoxFit.scaleDown,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              Icons.schedule_outlined,
+              size: iconSize * 0.54,
+              color: ink.withValues(alpha: 0.80),
+            ),
+            SizedBox(width: iconSize * 0.20),
+            Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                SizedBox(
-                  // KOS: :140 `height: Math.round(widget.iconSize * 0.58)`。
-                  height: (iconSize * 0.58).roundToDouble(),
-                  child: Center(
-                    child: Text(
-                      DockClockCard.timeText(data.now),
-                      maxLines: 1,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        // iOS 玻璃字形降级 → 语义 textPrimary（记 deltas）。
-                        color: colors.textPrimary,
-                        // KOS: :223-228（pixelSize max(16,
-                        // round(iconSize*0.43))，DemiBold，letterSpacing
-                        // 0.6）。
-                        fontSize: math.max(
-                          kDockClockTimeMinFont,
-                          (iconSize * kDockClockTimeFontRatio).roundToDouble(),
-                        ),
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 0.6,
-                        height: 1.0,
-                      ),
-                    ),
+                Text(
+                  DockClockCard.timeText(data.now),
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: ink,
+                    fontSize: iconSize * 0.40,
+                    fontWeight: FontWeight.w500,
+                    height: 1.05,
                   ),
                 ),
-                SizedBox(
-                  // KOS: :232-247 `height: Math.round(iconSize * 0.27)`，
-                  // opacity 0.82、pixelSize max(9, round(iconSize*0.21))
-                  // Medium。
-                  height: (iconSize * 0.27).roundToDouble(),
-                  child: Center(
-                    child: Text(
-                      DockClockCard.dateText(data.now),
-                      maxLines: 1,
-                      textAlign: TextAlign.center,
-                      style: TextStyle(
-                        color: colors.textPrimary.withValues(
-                          alpha: kDockClockDateAlpha,
-                        ),
-                        fontSize: math.max(
-                          9,
-                          (iconSize * kDockClockDateFontRatio).roundToDouble(),
-                        ),
-                        fontWeight: FontWeight.w500,
-                        height: 1.0,
-                      ),
-                    ),
+                SizedBox(height: iconSize * 0.07),
+                Text(
+                  '${data.now.month}月${data.now.day}日  ·  '
+                  '${DockClockCard.weekdayName(data.now)}',
+                  maxLines: 1,
+                  style: TextStyle(
+                    color: ink.withValues(alpha: 0.72),
+                    fontSize: iconSize * 0.20,
+                    fontWeight: FontWeight.w400,
+                    height: 1.05,
                   ),
                 ),
               ],
             ),
-          ),
-          SizedBox(
-            width: rowWidth * 0.40, // KOS: :253 `width * 0.40`
-            child: Column(
-              children: [
-                Expanded(
-                  child: _SolarEventRow(label: '日落', value: data.sunset),
-                ),
-                Expanded(
-                  child: _SolarEventRow(label: '日出', value: data.sunrise),
-                ),
-              ],
-            ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 }
 
-/// KOS `SolarEventRow` component（DockClockWidget.qml:63-92）：label
-/// Medium @0.72 + value DemiBold @0.92（`--:--` 时 0.48）。
-class _SolarEventRow extends StatelessWidget {
-  const _SolarEventRow({required this.label, required this.value});
-
-  final String label;
-  final String value;
-
-  @override
-  Widget build(BuildContext context) {
-    final iconSize = DockMetricsScope.of(context).iconSize;
-    final colors = context.shellColors;
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text(
-          label,
-          style: TextStyle(
-            color: colors.textPrimary.withValues(alpha: 0.72), // KOS: :74
-            fontSize: math.max(8, (iconSize * 0.18).roundToDouble()), // :77
-            fontWeight: FontWeight.w500,
-            height: 1.0,
-          ),
-        ),
-        // KOS: :69 `spacing: Math.max(1, Math.round(iconSize * 0.04))`。
-        SizedBox(width: math.max(1, (iconSize * 0.04).roundToDouble())),
-        Text(
-          value,
-          style: TextStyle(
-            color: colors.textPrimary.withValues(
-              alpha: value == '--:--' ? 0.48 : 0.92, // KOS: :84
-            ),
-            fontSize: math.max(8, (iconSize * 0.19).roundToDouble()), // :87
-            fontWeight: FontWeight.w600,
-            height: 1.0,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// compact 单行（DockClockWidget.qml:272-306）：glyph + `HH:mm` +
-/// `· 日落 --:--`。
+/// At smaller sizes, show only the glyph and second-level time.
 class _CompactRow extends StatelessWidget {
   const _CompactRow({required this.data});
 
@@ -274,33 +210,25 @@ class _CompactRow extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final iconSize = DockMetricsScope.of(context).iconSize;
-    final colors = context.shellColors;
+    final theme = context.shellTheme;
+    final ink = theme.backdropBlurEnabled
+        ? Colors.white
+        : theme.colors.textPrimary;
     return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.min,
       children: [
         Icon(
-          // KOS DockMetricGlyph kind:"clock"（DockClockWidget.qml:278-284）
-          // → material schedule glyph 近似（记 deltas）。
-          Icons.schedule,
-          size: math.max(8, (iconSize * 0.42).roundToDouble()),
-          color: colors.textPrimary,
+          Icons.schedule_outlined,
+          size: iconSize * 0.48,
+          color: ink.withValues(alpha: 0.80),
         ),
-        // KOS: :276 `spacing: Math.max(2, Math.round(iconSize * 0.08))`。
-        SizedBox(width: math.max(2, (iconSize * 0.08).roundToDouble())),
+        SizedBox(width: iconSize * 0.18),
         Text(
-          DockClockCard.shortTimeText(data.now),
+          DockClockCard.timeText(data.now),
+          maxLines: 1,
           style: TextStyle(
-            color: colors.textPrimary,
-            fontSize: math.max(9, (iconSize * 0.52).roundToDouble()), // :291
-            fontWeight: FontWeight.w600,
-            height: 1.0,
-          ),
-        ),
-        Text(
-          ' · 日落 ${data.sunset}', // KOS: :296 `"· 日落 " + sunsetTime`
-          style: TextStyle(
-            color: colors.textPrimary.withValues(alpha: 0.68), // :298
-            fontSize: math.max(6, (iconSize * 0.28).roundToDouble()),
+            color: ink,
+            fontSize: iconSize * 0.42,
             fontWeight: FontWeight.w500,
             height: 1.0,
           ),

@@ -23,6 +23,8 @@
 /// `textSecondary`；其余前景/材质走 `context.shellTheme/shellColors`。
 library;
 
+import '../theme/backdrop_content.dart';
+
 import 'dart:async';
 import 'dart:math' as math;
 
@@ -106,7 +108,7 @@ class _ActivityPanelState extends State<ActivityPanel> {
   Widget build(BuildContext context) {
     final theme = context.shellTheme;
     final colors = context.shellColors;
-    final cardColors = KosActivityCardColors.forShell(context.shellTheme);
+    final cardColors = KosActivityCardColors.forShell(panelContentTheme(context.shellTheme));
     final snapshot = _snapshot;
     final tracker = _tracker;
     final now = DateTime.now();
