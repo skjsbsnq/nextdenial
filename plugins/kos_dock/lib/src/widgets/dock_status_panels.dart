@@ -30,8 +30,7 @@ import 'package:denial_flutter_sdk/glass_configuration.dart'
     show ShellTransparencyMode;
 import 'package:denial_flutter_sdk/input.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
-import 'package:denial_flutter_sdk/surfaces.dart'
-    show ShellSurfacePresentation;
+import 'package:denial_flutter_sdk/surfaces.dart' show ShellSurfacePresentation;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -128,21 +127,20 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
     super.initState();
     _reveal =
         AnimationController(
-            vsync: this,
-            // KOS: common/AppearanceTokens.qml:514-515 —
-            // `popupOpenDuration:150` / `popupCloseDuration:140`。
-            duration: kDockMenuOpenDuration,
-            reverseDuration: kDockMenuCloseDuration,
-          )
-          ..addStatusListener((status) {
-            // KOS PopupMotion.qml:22-32 — `close()` 动画到 0 完成后
-            // `mapped=false`：退场播完才收 portal + 释放协调器。
-            if (status == AnimationStatus.dismissed && mounted) {
-              _closing = false;
-              _portal.hide();
-              _coordinator.release(this);
-            }
-          });
+          vsync: this,
+          // KOS: common/AppearanceTokens.qml:514-515 —
+          // `popupOpenDuration:150` / `popupCloseDuration:140`。
+          duration: kDockMenuOpenDuration,
+          reverseDuration: kDockMenuCloseDuration,
+        )..addStatusListener((status) {
+          // KOS PopupMotion.qml:22-32 — `close()` 动画到 0 完成后
+          // `mapped=false`：退场播完才收 portal + 释放协调器。
+          if (status == AnimationStatus.dismissed && mounted) {
+            _closing = false;
+            _portal.hide();
+            _coordinator.release(this);
+          }
+        });
   }
 
   @override
@@ -193,9 +191,7 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
     if (_reduceMotion) {
       _reveal.value = 1;
     } else {
-      unawaited(
-        _reveal.animateTo(1, curve: Curves.easeOutCubic),
-      );
+      unawaited(_reveal.animateTo(1, curve: Curves.easeOutCubic));
     }
   }
 
@@ -234,6 +230,7 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
     _reveal.value = 0;
     _setOpen(false);
   }
+
   /// [DockPopup] 契约：被其他 popup 抢占时立即收场（KOS
   /// `DockModelService.dismissDockPopupImmediately`）。
   @override
@@ -253,13 +250,12 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
       context.findAncestorStateOfType<DockStatusPanelAnchorState>();
 
   @override
-  Widget build(BuildContext context) =>
-      OverlayPortal.overlayChildLayoutBuilder(
-        controller: _portal,
-        overlayChildBuilder: _buildOverlay,
-        // 格（controlcenter/wifi/bt）经 scope 读 `panelOpen`。
-        child: DockStatusPanelOpenScope(open: _open, child: widget.child),
-      );
+  Widget build(BuildContext context) => OverlayPortal.overlayChildLayoutBuilder(
+    controller: _portal,
+    overlayChildBuilder: _buildOverlay,
+    // 格（controlcenter/wifi/bt）经 scope 读 `panelOpen`。
+    child: DockStatusPanelOpenScope(open: _open, child: widget.child),
+  );
 
   /// 最近祖先 anchor 的面板开合态（无祖先 → false；KOS
   /// `ControlCenterToggle.panelOpen`）。
@@ -366,12 +362,14 @@ class DockStatusPanelSurface extends StatelessWidget {
   const DockStatusPanelSurface({
     required this.radius,
     required this.child,
+    this.clipBackdropToRadius = false,
     super.key,
   });
 
   /// 面板圆角（Wi-Fi 19 / 蓝牙 20，squircle 退化记 deltas）。
   final double radius;
   final Widget child;
+  final bool clipBackdropToRadius;
 
   @override
   Widget build(BuildContext context) {
@@ -383,6 +381,10 @@ class DockStatusPanelSurface extends StatelessWidget {
     final reveal = DockStatusPanelOpenScope.revealOf(context);
     final materialOpacity = _DockStatusPanelFadeScope.of(context);
     return DockBackdropBlur(
+      clipBackdropToRadius: clipBackdropToRadius,
+      // Keep static and fading glass compositing consistent. srcOver preserves
+      // destination pixels where filter output is only partially opaque.
+      glassBlendMode: BlendMode.srcOver,
       blur: theme.backdropBlurEnabled,
       borderRadius: radius,
       opacity: materialOpacity < 1
@@ -438,9 +440,11 @@ class _DockStatusPanelFadeScope extends InheritedWidget {
 
   final double opacity;
 
-  static double of(BuildContext context) => context
-      .dependOnInheritedWidgetOfExactType<_DockStatusPanelFadeScope>()
-      ?.opacity ?? 1.0;
+  static double of(BuildContext context) =>
+      context
+          .dependOnInheritedWidgetOfExactType<_DockStatusPanelFadeScope>()
+          ?.opacity ??
+      1.0;
 
   @override
   bool updateShouldNotify(_DockStatusPanelFadeScope oldWidget) =>
@@ -538,9 +542,7 @@ class DockStatusPanelEmptyLabel extends StatelessWidget {
         text,
         style: TextStyle(
           fontSize: kDockStatusEmptyFontSize,
-          color: colors.textSecondary.withValues(
-            alpha: kDockStatusEmptyAlpha,
-          ),
+          color: colors.textSecondary.withValues(alpha: kDockStatusEmptyAlpha),
         ),
       ),
     );

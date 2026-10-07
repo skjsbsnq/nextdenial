@@ -1164,42 +1164,51 @@ class _DockControlCenterPanelState extends ConsumerState<DockControlCenterPanel>
       SessionPowerAction.powerOff: '关机',
     };
     final confirmation = state.confirmationAction;
-    return ListView(
-      padding: const EdgeInsets.all(12),
-      children: [
-        if (state.error != null)
-          Text(
-            state.error!,
-            style: TextStyle(color: context.shellColors.textPrimary),
-          ),
-        if (confirmation != null) ...[
-          Text(
-            '确认${labels[confirmation]}？',
-            style: TextStyle(color: context.shellColors.textPrimary),
-          ),
-          TextButton(
-            onPressed: state.busy ? null : controller.cancelConfirmation,
-            child: const Text('取消'),
-          ),
-          TextButton(
-            key: const ValueKey<String>('cc.session.confirm'),
-            onPressed: state.busy
-                ? null
-                : () => unawaited(controller.confirm()),
-            child: Text('确认${labels[confirmation]}'),
-          ),
-        ] else
-          for (final action in SessionPowerAction.values)
-            ListTile(
-              key: ValueKey<String>('cc.session.${action.name}'),
-              title: Text(labels[action]!),
-              subtitle: state.availabilityFor(action).unavailableReason == null
-                  ? null
-                  : Text(state.availabilityFor(action).unavailableReason!),
-              enabled: !state.busy && state.availabilityFor(action).enabled,
-              onTap: () => unawaited(controller.request(action)),
-            ),
-      ],
+    // The shell popup has no Material ancestor. ListTile's Ink decoration
+    // requires one even in release builds; keep it transparent over the glass.
+    return Material(
+      type: MaterialType.transparency,
+      child: ListTileTheme(
+        textColor: context.shellColors.textPrimary,
+        child: ListView(
+          padding: const EdgeInsets.all(12),
+          children: [
+            if (state.error != null)
+              Text(
+                state.error!,
+                style: TextStyle(color: context.shellColors.textPrimary),
+              ),
+            if (confirmation != null) ...[
+              Text(
+                '确认${labels[confirmation]}？',
+                style: TextStyle(color: context.shellColors.textPrimary),
+              ),
+              TextButton(
+                onPressed: state.busy ? null : controller.cancelConfirmation,
+                child: const Text('取消'),
+              ),
+              TextButton(
+                key: const ValueKey<String>('cc.session.confirm'),
+                onPressed: state.busy
+                    ? null
+                    : () => unawaited(controller.confirm()),
+                child: Text('确认${labels[confirmation]}'),
+              ),
+            ] else
+              for (final action in SessionPowerAction.values)
+                ListTile(
+                  key: ValueKey<String>('cc.session.${action.name}'),
+                  title: Text(labels[action]!),
+                  subtitle:
+                      state.availabilityFor(action).unavailableReason == null
+                      ? null
+                      : Text(state.availabilityFor(action).unavailableReason!),
+                  enabled: !state.busy && state.availabilityFor(action).enabled,
+                  onTap: () => unawaited(controller.request(action)),
+                ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -2016,6 +2025,7 @@ class _DockControlCenterPillState extends State<DockControlCenterPill>
               : kDockControlCenterPillUnavailableAlpha,
           child: DockStatusPanelSurface(
             radius: kDockControlCenterPillRadius,
+            clipBackdropToRadius: true,
             child: Stack(
               children: [
                 // 圆开关盘（KOS :542-554）。

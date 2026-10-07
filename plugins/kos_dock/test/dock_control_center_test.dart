@@ -29,6 +29,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderListenable;
 import 'package:flutter_test/flutter_test.dart';
 import 'package:kos_dock/src/theme/dock_tokens.dart';
+import 'package:kos_dock/src/widgets/dock_backdrop_blur.dart';
 import 'package:kos_dock/src/widgets/dock_control_center_panel.dart';
 import 'package:kos_dock/src/widgets/dock_status_panels.dart';
 import 'package:kos_dock/src/widgets/dock_wifi_panel.dart';
@@ -836,6 +837,22 @@ void main() {
     await _settle(tester);
     await _openPanel(tester);
     expect(_mainCardCount(tester), 10);
+    for (final id in ['cc.wifiPill', 'cc.btPill']) {
+      final surface = tester.widget<DockStatusPanelSurface>(
+        find.descendant(
+          of: find.byKey(ValueKey<String>(id)),
+          matching: find.byType(DockStatusPanelSurface),
+        ),
+      );
+      expect(surface.clipBackdropToRadius, isTrue);
+      final backdrop = tester.widget<DockBackdropBlur>(
+        find.descendant(
+          of: find.byKey(ValueKey<String>(id)),
+          matching: find.byType(DockBackdropBlur),
+        ),
+      );
+      expect(backdrop.glassBlendMode, BlendMode.srcOver);
+    }
     for (final id in ['screenshot', 'theme', 'power', 'dnd', 'nightlight']) {
       expect(find.byKey(ValueKey<String>('cc.$id')), findsOneWidget);
     }
@@ -855,6 +872,13 @@ void main() {
     await tester.tap(find.byKey(const ValueKey<String>('cc.power')));
     await _settle(tester);
     expect(find.text('电源与会话'), findsOneWidget);
+    final sessionTile = tester.element(
+      find.byKey(const ValueKey<String>('cc.session.logout')),
+    );
+    expect(Material.maybeOf(sessionTile), isNotNull);
+    final material = sessionTile.findAncestorWidgetOfExactType<Material>()!;
+    expect(material.type, MaterialType.transparency);
+    expect(tester.takeException(), isNull);
     await tester.tap(find.byKey(const ValueKey<String>('cc.session.logout')));
     await tester.pump();
     expect(

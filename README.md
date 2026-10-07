@@ -16,6 +16,8 @@
 
 ## 构建
 
+本机测试版源码仓库与已安装正式版的区别，以及正式版插件构建、激活命令，见 [本机构建说明](BUILD_NOTES.md)。
+
 每个插件都是标准 Flutter/Dart package，依赖 Denial SDK（`denial_sdk`、`denial_flutter_sdk`）：
 
 ```bash
