@@ -308,16 +308,7 @@ Future<void> _settle(WidgetTester tester) async {
 }
 
 int _dotCount(WidgetTester tester) =>
-    tester
-        .widgetList<Container>(
-          find.byWidgetPredicate(
-            (w) =>
-                w is Container &&
-                w.decoration is BoxDecoration &&
-                (w.decoration as BoxDecoration).shape == BoxShape.circle,
-          ),
-        )
-        .length;
+    find.byKey(const ValueKey('dock.runningIndicator')).evaluate().length;
 
 // ── tests ──────────────────────────────────────────────────────────────
 void main() {
@@ -481,15 +472,15 @@ void main() {
       expect(find.byType(DockIcon), findsNothing);
     });
 
-    testWidgets('dot 数 = min(3, windowCount)，未运行不显示', (tester) async {
+    testWidgets('每个运行应用显示一个横条', (tester) async {
       final services = _FakeShellServices()
         ..apps = _apps
         ..windowsList = [
           _window(1, 'kate'),
           _window(2, 'kate'),
           _window(3, 'kate'),
-          _window(4, 'kate'), // 4 窗 → 3 dots
-          _window(5, 'dolphin'), // 1 窗 → 1 dot
+          _window(4, 'kate'), // 多窗 → 两层横条
+          _window(5, 'dolphin'), // 单窗 → 一层横条
           _window(9, 'firefox'), // 未 pin 的运行应用 → 追加一个条目（§5 修正）
         ];
       final store = _MemoryDockPreferencesStore(
@@ -499,8 +490,8 @@ void main() {
       await _settle(tester);
       // kate + dolphin（pinned）+ firefox（运行中未 pin）。
       expect(find.byType(DockIcon), findsNWidgets(3));
-      // 3(kate) + 1(dolphin) + 1(firefox) = 5 个圆点。
-      expect(_dotCount(tester), 5);
+      // 三个运行应用各有一个横条绘制区域。
+      expect(_dotCount(tester), 3);
     });
 
     testWidgets('windowAppIds 别名匹配到 pin', (tester) async {
@@ -899,7 +890,7 @@ void main() {
       await _settle(tester);
       final icons = find.byType(DockIcon);
       expect(icons, findsNWidgets(2));
-      expect(_dotCount(tester), 4); // kate 2 窗 + dolphin 2 窗
+      expect(_dotCount(tester), 2); // kate 与 dolphin 各有一个横条绘制区域
       final first = tester.widget<DockIcon>(icons.at(0));
       final second = tester.widget<DockIcon>(icons.at(1));
       expect(first.isPinnedEntry, isTrue);

@@ -29,6 +29,7 @@ import 'dart:math' as math;
 import 'package:denial_flutter_sdk/services.dart';
 import 'package:denial_flutter_sdk/shell_theme.dart';
 import 'package:flutter/widgets.dart';
+import 'package:flutter/material.dart' show ColorScheme;
 
 import '../theme/dock_tokens.dart';
 import 'dock_preview_popup.dart';
@@ -148,12 +149,10 @@ class DockEntranceOffset extends InheritedWidget {
       0.0;
 
   @override
-  bool updateShouldNotify(DockEntranceOffset oldWidget) =>
-      oldWidget.dx != dx;
+  bool updateShouldNotify(DockEntranceOffset oldWidget) => oldWidget.dx != dx;
 }
 
-class _DockIconState extends State<DockIcon>
-    with TickerProviderStateMixin {
+class _DockIconState extends State<DockIcon> with TickerProviderStateMixin {
   /// 指针缺席时的独立 hover 进度（0/1 bounded tween，`kDockHoverEaseDuration`
   /// easeOutCubic）：KOS `dock/DockIcon.qml:291-300` 的无 magnification
   /// hover 回退分支（scale 1.20 + lift −max(2,round(iconSize×0.08))）。
@@ -401,8 +400,9 @@ class _DockIconState extends State<DockIcon>
                     height: metrics.dockHeight,
                     child: IgnorePointer(
                       child: AnimatedOpacity(
-                        opacity:
-                            _hovering && !_showActiveBackground ? 1.0 : 0.0,
+                        opacity: _hovering && !_showActiveBackground
+                            ? 1.0
+                            : 0.0,
                         duration: kDockHoverHighlightDuration,
                         curve: Curves.easeOutCubic,
                         // TASK-12 复审缺陷3：同底斑——Align+SizedBox 恢复
@@ -463,18 +463,18 @@ class _DockIconState extends State<DockIcon>
                           // MagnificationPointer 非 null）。
                           final hasPointer =
                               MagnificationPointer.of(context) != null ||
-                                  WaveEnvelope.activeOf(context);
+                              WaveEnvelope.activeOf(context);
                           final hoverP = _hover.value;
                           final hoverScale = hasPointer
                               ? 1.0
                               : 1.0 + (kDockHoverScale - 1.0) * hoverP;
                           final hoverLift = _hovering
                               ? -math.max(
-                                  2.0,
-                                  (iconSize * kDockHoverLiftRatio)
-                                      .roundToDouble(),
-                                ) *
-                                  hoverP
+                                      2.0,
+                                      (iconSize * kDockHoverLiftRatio)
+                                          .roundToDouble(),
+                                    ) *
+                                    hoverP
                               : 0.0;
                           return Transform.translate(
                             offset: Offset(0, hoverLift - _bounceLift.value),
@@ -498,10 +498,8 @@ class _DockIconState extends State<DockIcon>
                       ),
                     ),
                   ),
-                  // dot 指示行：钉在 pill 区（列底上 dockHeight 高）内的
-                  // runningIndicatorGap 处（KOS: DockIcon.qml:788-833——仅
-                  // dot 分支）。TASK-12：dot 留 pill 内贴槽底，不跟放大
-                  // 美术盒上探。
+                  // Official taskbar underline, anchored inside the Dock body.
+                  // It stays in place when the application icon magnifies.
                   Positioned(
                     bottom: 0,
                     height: metrics.dockHeight,
@@ -512,12 +510,10 @@ class _DockIconState extends State<DockIcon>
                           bottom: _runningIndicatorGapFor(iconSize),
                         ),
                         child: IgnorePointer(
-                          child: _DockDots(
+                          child: _DockRunningIndicator(
                             running: widget.windows.isNotEmpty,
+                            active: widget.isActivated,
                             windowCount: widget.windows.length,
-                            color: colors.textPrimary.withValues(
-                              alpha: kDockDotAlpha,
-                            ),
                           ),
                         ),
                       ),
@@ -541,44 +537,66 @@ class _DockIconState extends State<DockIcon>
   );
 }
 
-/// dot 行：`dotCount=min(3,max(1,windowCount))`、size 4(count≥3)/5、
-/// 间距 2、行宽 `count*size+(count-1)*2`、运行中才显示、140ms 透明度过渡
-/// （KOS: dock/DockIcon.qml:790-811,813-833）。
-class _DockDots extends StatelessWidget {
-  const _DockDots({
+/// Matches denial_taskbar: active primary underline, short inactive underline,
+/// and one translucent rear copy for multiple windows.
+class _DockRunningIndicator extends StatelessWidget {
+  const _DockRunningIndicator({
     required this.running,
+    required this.active,
     required this.windowCount,
-    required this.color,
   });
 
   final bool running;
+  final bool active;
   final int windowCount;
-  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    final count = math.min(kDockDotMaxCount, math.max(1, windowCount));
-    final size = count >= 3 ? kDockDotSizeCompact : kDockDotSizeWide;
-    final width = count * size + (count - 1) * kDockDotSpacing;
+    final shell = context.shellTheme;
+    final scheme = ColorScheme.fromSeed(
+      seedColor: shell.accent,
+      brightness: shell.brightness,
+    );
+    final reduceMotion = MediaQuery.disableAnimationsOf(context);
     return AnimatedOpacity(
       opacity: running ? 1.0 : 0.0,
-      duration: kDockDotFadeDuration,
+      duration: reduceMotion ? Duration.zero : kDockDotFadeDuration,
       curve: Curves.easeOutCubic,
-      child: SizedBox(
-        width: width,
-        height: size,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            for (var i = 0; i < count; i++)
-              Container(
-                width: size,
-                height: size,
-                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
-              ),
-          ],
+      child: AnimatedContainer(
+        key: const ValueKey('dock.runningIndicator'),
+        duration: reduceMotion ? Duration.zero : const Duration(milliseconds: 160),
+        width: active ? 22 : 6,
+        height: 6,
+        child: CustomPaint(
+          painter: _DockInstanceStackPainter(
+            count: math.min(2, windowCount),
+            color: active ? scheme.primary : scheme.onSurfaceVariant,
+          ),
         ),
       ),
     );
   }
+}
+
+class _DockInstanceStackPainter extends CustomPainter {
+  const _DockInstanceStackPainter({required this.count, required this.color});
+  final int count;
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    for (var i = count - 1; i >= 0; i--) {
+      canvas.drawRRect(
+        RRect.fromRectAndRadius(
+          Rect.fromLTWH(i * 4, 0, size.width, 3),
+          const Radius.circular(1.5),
+        ),
+        Paint()..color = color.withValues(alpha: color.a * (i == 0 ? 1 : 0.65)),
+      );
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DockInstanceStackPainter oldDelegate) =>
+      count != oldDelegate.count || color != oldDelegate.color;
 }

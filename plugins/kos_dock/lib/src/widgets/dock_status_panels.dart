@@ -38,6 +38,14 @@ import '../theme/dock_tokens.dart';
 import 'dock_backdrop_blur.dart';
 import 'dock_preview_popup.dart';
 
+/// The full Dock body supplies the vertical boundary for status popups.
+class DockStatusPanelBounds extends InheritedWidget {
+  const DockStatusPanelBounds({required super.child, super.key});
+
+  @override
+  bool updateShouldNotify(DockStatusPanelBounds oldWidget) => false;
+}
+
 /// 面板内容的 Esc 分步钩子（KOS `bar/ControlCenterPanel.qml:512-524`：确认框、
 /// 子页、整面板逐级回退）。面板内容在 initState 里经
 /// [DockStatusPanelAnchorState.setEscapeHandler] 注册自己；未注册（Wi-Fi、
@@ -274,10 +282,17 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
     );
     final output = Offset.zero & layout.overlaySize;
     final width = widget.panelWidth;
+    final dockElement = context
+        .getElementForInheritedWidgetOfExactType<DockStatusPanelBounds>();
+    final dockBox = dockElement?.findRenderObject();
+    final overlayBox = Overlay.of(context).context.findRenderObject();
+    final dockTop = dockBox is RenderBox && overlayBox is RenderBox
+        ? dockBox.localToGlobal(Offset.zero, ancestor: overlayBox).dy
+        : anchor.top;
     final gap = widget.panelGap;
     final maxHeight = math.max(
       0.0,
-      anchor.top - output.top - kDockPopupEdgeMargin - gap,
+      dockTop - output.top - kDockPopupEdgeMargin - gap,
     );
     if (maxHeight <= 0) return const SizedBox.shrink();
     final height = math.min(widget.panelHeight, maxHeight);
@@ -316,7 +331,7 @@ class DockStatusPanelAnchorState<T extends DockStatusPanelAnchor>
               Positioned(
                 left: left.toDouble(),
                 // 面板底边贴格顶 −gap（KOS `anchor.margins.top: -8/-6`）。
-                bottom: layout.overlaySize.height - anchor.top + gap,
+                bottom: layout.overlaySize.height - dockTop + gap,
                 width: width,
                 height: height,
                 child: AnimatedBuilder(

@@ -1320,7 +1320,7 @@ const double kDockBluetoothPanelRadius = 20;
 /// KOS: bar/NetworkPanel.qml:54-55（-8）、bar/BluetoothPanel.qml:31-34（-6）、
 /// bar/StatusTooltip.qml:35（-6）。
 const double kDockWifiPanelGap = 8;
-const double kDockBluetoothPanelGap = 6;
+const double kDockBluetoothPanelGap = 8;
 const double kDockStatusTooltipGap = 6;
 
 /// 面板内容外边距/列表内边距（px）：KOS Column `anchors.margins: 10`、

@@ -74,6 +74,7 @@ import '../state/dock_row_entries.dart';
 import '../state/dock_settings.dart';
 import '../theme/dock_tokens.dart';
 import 'dock_backdrop_blur.dart';
+import 'dock_status_panels.dart';
 import 'dock_divider.dart';
 import 'dock_icons.dart';
 import 'dock_preview_popup.dart';
@@ -610,7 +611,7 @@ class _KosDockShellState extends ConsumerState<KosDockShell> {
                                         trayEstimateWidth,
                                       ),
                                       height: metrics.dockHeight,
-                                      child: trayAccessory,
+                                      child: DockStatusPanelBounds(child: trayAccessory),
                                     ),
                                 ],
                               ),
