@@ -272,6 +272,8 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
     if (_disposed) return;
     if (_latest == null || _latest!.status != 'ready') {
       _location = await _loadLocation();
+      // Publish restored data to existing subscribers before the network fetch.
+      if (_latest?.status == 'ready') _emit(_latest!);
       if (_latest == null) {
         _emit(DockWeatherSnapshot(status: 'loading', cityName: _location.name));
       }
@@ -300,7 +302,7 @@ final class OpenMeteoDockWeatherProvider implements DockWeatherProvider {
       _nextRefreshAt = _now().add(refreshInterval); // weather.go:605
       final snapshot = _projectSnapshot(payload, 'ready');
       _emit(snapshot);
-      unawaited(_persist());
+      await _persist();
       return snapshot;
     } on Object {
       _failStreak += 1;

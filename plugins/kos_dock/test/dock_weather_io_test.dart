@@ -205,9 +205,14 @@ void main() {
         stateStore: _MemoryStateStore(cached),
         deskCenter: _FakeDeskCenterSource(const {'location': _jian}),
       );
+      final seen = <String>[];
+      final sub = p.snapshots.listen((snapshot) => seen.add(snapshot.cityName));
       // start() 内 `_loadLocation` 恢复缓存快照 → 但随后 refresh 会立刻
       // 覆盖为吉安数据的 ready 帧；直接验证 location 已接管。
       await p.start();
+      await Future<void>.delayed(Duration.zero);
+      expect(seen, ['缓存城', '吉安']);
+      await sub.cancel();
       expect(p.location.name, '吉安');
       expect(p.latest?.cityName, '吉安');
       p.dispose();

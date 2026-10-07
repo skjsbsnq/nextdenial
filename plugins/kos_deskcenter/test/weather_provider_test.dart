@@ -6,6 +6,7 @@
 // 回退）、失败指数退避 weatherBackoff（:552-565）、geocoding 搜索
 // （:397-435）、位置合法性校验（:185-191）。
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -57,7 +58,9 @@ void main() {
       httpGet: (uri) async {
         captured.add(uri);
         if (thrown != null) throw thrown;
-        return (jsonDecode(body) as Map).map((k, v) => MapEntry(k.toString(), v));
+        return (jsonDecode(body) as Map).map(
+          (k, v) => MapEntry(k.toString(), v),
+        );
       },
     );
   }
@@ -144,8 +147,9 @@ void main() {
         statePath: '/nonexistent/x.json',
         httpGet: (uri) async {
           if (fail) throw const HttpException('offline');
-          return (jsonDecode(forecastBody) as Map)
-              .map((k, v) => MapEntry(k.toString(), v));
+          return (jsonDecode(forecastBody) as Map).map(
+            (k, v) => MapEntry(k.toString(), v),
+          );
         },
       );
       await p.start();
@@ -171,6 +175,47 @@ void main() {
   });
 
   group('位置持久化（state 文件）', () {
+    test('重启在网络返回前推送吉安缓存，离线仍保留数据', () async {
+      final dir = await Directory.systemTemp.createTemp('kosw-cache');
+      addTearDown(() => dir.delete(recursive: true));
+      final path = '${dir.path}/weather.json';
+      final first = provider(captured: <Uri>[], statePath: path);
+      addTearDown(first.dispose);
+      await first.setLocation(
+        const KosWeatherLocation(
+          id: 'geo:ji-an',
+          name: '吉安',
+          latitude: 27.1138,
+          longitude: 114.9937,
+        ),
+      );
+      final response = Completer<Map<String, Object?>>();
+      final requested = Completer<void>();
+      final restored = Completer<void>();
+      final second = WeatherProvider(
+        statePath: path,
+        httpGet: (_) {
+          requested.complete();
+          return response.future;
+        },
+      );
+      addTearDown(second.dispose);
+      final sub = second.snapshots.listen((snapshot) {
+        expect(snapshot.status, 'ready');
+        expect(snapshot.cityName, '吉安');
+        expect(snapshot.currentTemp, 26.4);
+        if (!restored.isCompleted) restored.complete();
+      });
+      addTearDown(sub.cancel);
+      final started = second.start();
+      await requested.future;
+      await restored.future.timeout(const Duration(seconds: 2));
+      response.completeError(const HttpException('offline'));
+      await started;
+      expect(second.latest!.cityName, '吉安');
+      expect(second.latest!.status, 'ready');
+    });
+
     test('setLocation 写入 weather.json 并在新实例恢复', () async {
       final dir = await Directory.systemTemp.createTemp('kosw');
       final path = '${dir.path}/weather.json';
@@ -221,7 +266,12 @@ void main() {
       final before = captured.length;
       await expectLater(
         p.setLocation(
-          const KosWeatherLocation(id: '', name: '', latitude: 91, longitude: 0),
+          const KosWeatherLocation(
+            id: '',
+            name: '',
+            latitude: 91,
+            longitude: 0,
+          ),
         ),
         throwsA(isA<FormatException>()),
       );
@@ -258,9 +308,7 @@ void main() {
   {"id":1815577,"name":"上海","latitude":31.23,"longitude":121.47,
    "timezone":"Asia/Shanghai","country_code":"cn","country":"中国","admin1":"上海"},
   {"id":0,"name":"","latitude":0,"longitude":0}
-]}''')
-                  as Map)
-              .map((k, v) => MapEntry(k.toString(), v));
+]}''') as Map).map((k, v) => MapEntry(k.toString(), v));
         },
       );
       final results = await p.searchLocations('上海', language: 'zh');

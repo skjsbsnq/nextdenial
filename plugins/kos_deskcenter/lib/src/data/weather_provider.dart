@@ -315,6 +315,8 @@ final class WeatherProvider {
       // _latest 已有 ready 缓存（_loadLocation 恢复）时跳过 loading 帧，
       // 直接后台 refresh 覆盖——重启后先显示旧数据而非「无数据」。
       _location = await _loadLocation();
+      // UI 已在 start 前订阅；恢复缓存后立即推送，不等待网络返回。
+      if (_latest?.status == 'ready') _emit(_latest!);
       if (_latest == null) {
         _emit(
           WeatherSnapshot(
@@ -350,7 +352,7 @@ final class WeatherProvider {
       _emit(snapshot);
       // 快照落盘（`current`/`daily`/`hourly` + `fetchedAt`）→ 下次启动
       // 先恢复缓存，无网/首拉失败也有旧数据显示（weather.go durable state）。
-      unawaited(_persistLocation(_location));
+      await _persistLocation(_location);
       return snapshot;
     } on Object {
       _failStreak++;
