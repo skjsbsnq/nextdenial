@@ -36,9 +36,10 @@ final class KosDataClientException implements Exception {
 ///
 /// 单连接长驻，请求/响应与事件帧在同一连接上交错（data-channels.md §1.1）；
 /// 断线时只读操作按 operation 去重排队（上限 200），写操作立即失败；
-/// 连接由客户端以 2s 周期重建（JsonlClient.qml:199-204）。socket 打开即
-/// 视为 connected（对齐 JsonlClient.qml:114-118 直接 flush，服务端无
-/// 握手帧）。
+/// 连接由客户端周期重建（JsonlClient.qml:199-204 ~2s 周期），本端退避为
+/// 2s 起步逐次翻倍、封顶 60s——kos-data.sock 缺失的 Denial 会话里不再产生
+/// 永久 2s 定时器。socket 打开即视为 connected（对齐
+/// JsonlClient.qml:114-118 直接 flush，服务端无握手帧）。
 final class SocketKosDataClient implements KosDataClient {
   SocketKosDataClient({String? socketPath})
     : _socketPath = socketPath ?? _defaultSocketPath();
@@ -62,8 +63,11 @@ final class SocketKosDataClient implements KosDataClient {
   /// 过期扫描周期（JsonlClient.qml:124-129 `Timer interval: 5000`）。
   static const Duration _expiryScanInterval = Duration(seconds: 5);
 
-  /// 重连间隔（JsonlClient.qml:199-204 ~2s 周期重建）。
+  /// 重连起步间隔（JsonlClient.qml:199-204 ~2s 周期重建）。
   static const Duration _reconnectDelay = Duration(seconds: 2);
+
+  /// 重连退避上限：每次失败翻倍到此为止（防 sock 永久缺失时空转）。
+  static const Duration _reconnectDelayMax = Duration(seconds: 60);
 
   final String _socketPath;
 
@@ -75,6 +79,9 @@ final class SocketKosDataClient implements KosDataClient {
   Timer? _reconnectTimer;
   Timer? _expiryTimer;
   int _nextRequestId = 0;
+
+  /// 连续重连失败次数：连上/dispose 归零，退避 = 2s << 次数（封顶 60s）。
+  int _reconnectAttempts = 0;
 
   /// 在途请求：requestId → 控制器与到期时刻。
   final Map<String, _PendingRequest> _inFlight = {};
@@ -136,6 +143,8 @@ final class SocketKosDataClient implements KosDataClient {
   void _attach(Socket socket) {
     _socket = socket;
     _available = true;
+    // 连上即把退避归零——之后断线重新从 2s 起。
+    _reconnectAttempts = 0;
     _lines = socket
         .cast<List<int>>()
         .transform(utf8.decoder)
@@ -167,11 +176,24 @@ final class SocketKosDataClient implements KosDataClient {
   }
 
   void _scheduleReconnect() {
-    _reconnectTimer ??= Timer(_reconnectDelay, () {
+    _reconnectTimer ??= Timer(_bumpReconnectDelay(), () {
       _reconnectTimer = null;
       if (_disposed || _available) return;
       unawaited(connect());
     });
+  }
+
+  /// 本次重连等待时长：2s 起步、每次失败翻倍封顶 60s（`??=` 右值只在
+  /// 无待决定时器时求值，故失败次数一次调度只增一）。
+  Duration _bumpReconnectDelay() {
+    final factor = 1 << _reconnectAttempts.clamp(0, 5);
+    _reconnectAttempts += 1;
+    final ms = _reconnectDelay.inMilliseconds * factor;
+    return Duration(
+      milliseconds: ms > _reconnectDelayMax.inMilliseconds
+          ? _reconnectDelayMax.inMilliseconds
+          : ms,
+    );
   }
 
   void _handleLine(String line) {
@@ -309,6 +331,7 @@ final class SocketKosDataClient implements KosDataClient {
   void dispose() {
     if (_disposed) return;
     _disposed = true;
+    _reconnectAttempts = 0;
     _reconnectTimer?.cancel();
     _expiryTimer?.cancel();
     final queued = _readQueue.values.toList();

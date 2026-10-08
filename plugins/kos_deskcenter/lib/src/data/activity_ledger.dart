@@ -173,6 +173,11 @@ final class ActivityLedger {
   /// 落盘 schema 版本（不符/缺失 → 空态）。
   static const int schemaVersion = 1;
 
+  /// 保留窗口（天）：day key 为 `yyyy-MM-dd`，字典序即日期序；uptime 与
+  /// app 条目只留最近 90 天（UI 热力图 `kosRecentUptimeDays` 取 60 天，留
+  /// 余量避免 socket 恢复的历史被 ledger 裁短），防跨天/跨 app 无界增长。
+  static const int _retainedDays = 90;
+
   /// 是否已有内存态（load 后有内容或 update 被调过）。
   bool get hasData => _uptimeByDay.isNotEmpty || _apps.isNotEmpty;
 
@@ -213,6 +218,7 @@ final class ActivityLedger {
     }
     _uptimeByDay = uptime;
     _apps = apps;
+    _prune();
   }
 
   /// 提交最新内存态并调度 debounce 落盘（多次调用合并为一次写）。
@@ -254,9 +260,29 @@ final class ActivityLedger {
       }
       _apps = List<ActivityLedgerAppEntry>.unmodifiable(merged.values);
     }
+    _prune();
     _dirty = true;
     _saveTimer?.cancel();
     _saveTimer = Timer(_saveDebounce, () => unawaited(flush()));
+  }
+
+  /// 裁剪到最近 [_retainedDays] 天：以全部 day key（uptime 键 ∪ app.day）
+  /// 排序取后 N 个为保留集，uptime 删窗口外键、apps 删窗口外条目。
+  void _prune() {
+    final days = <String>{
+      ..._uptimeByDay.keys,
+      for (final app in _apps) app.day,
+    }.toList()..sort();
+    if (days.length <= _retainedDays) return;
+    final retained = days.sublist(days.length - _retainedDays).toSet();
+    _uptimeByDay = Map<String, double>.unmodifiable({
+      for (final entry in _uptimeByDay.entries)
+        if (retained.contains(entry.key)) entry.key: entry.value,
+    });
+    _apps = List<ActivityLedgerAppEntry>.unmodifiable([
+      for (final app in _apps)
+        if (retained.contains(app.day)) app,
+    ]);
   }
 
   /// 立即落盘（防抖窗口内的尾部变更一并写入）。

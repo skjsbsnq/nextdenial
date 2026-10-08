@@ -604,17 +604,12 @@ class _RingsPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = lineWidth
       ..strokeCap = StrokeCap.round
-      ..isAntiAlias = true
-      ..maskFilter = const MaskFilter.blur(
-        BlurStyle.normal,
-        0.25,
-      ); // :1303 lineCap round
+      ..isAntiAlias = true; // :1303 lineCap round
     final arcPaint = Paint()
       ..style = PaintingStyle.stroke
       ..strokeWidth = lineWidth
       ..strokeCap = StrokeCap.round
-      ..isAntiAlias = true
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.25);
+      ..isAntiAlias = true;
     for (var i = 0; i < 3; i++) {
       final radius = radii[i];
       final r = Rect.fromCircle(center: Offset(center, center), radius: radius);
@@ -653,8 +648,7 @@ class _ThermometerPainter extends CustomPainter {
       ..style = PaintingStyle.stroke
       ..strokeWidth = math.max(1, size.width * 0.12)
       ..strokeCap = StrokeCap.round
-      ..isAntiAlias = true
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.25);
+      ..isAntiAlias = true;
     final w = size.width;
     final h = size.height;
     // 管身 + 球泡。
@@ -845,7 +839,6 @@ class KosSparklinePainter extends CustomPainter {
         ..strokeWidth =
             2 // :89
         ..isAntiAlias = true
-        ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 0.3)
         ..strokeJoin = StrokeJoin.round
         ..strokeCap = StrokeCap.round,
     );

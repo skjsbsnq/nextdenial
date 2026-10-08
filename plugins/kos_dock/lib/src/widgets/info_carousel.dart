@@ -35,8 +35,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'package:denial_flutter_sdk/services.dart';
-import 'package:denial_flutter_sdk/surfaces.dart'
-    show ShellSurfacePresentation;
+import 'package:denial_flutter_sdk/surfaces.dart' show ShellSurfacePresentation;
 import 'package:denial_sdk/system.dart';
 import 'package:flutter/foundation.dart' show listEquals;
 import 'package:flutter/gestures.dart';
@@ -143,24 +142,23 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     // popup 条款，dock_menu.dart 同式）；dismissed 收 portal + 释放协调器。
     _popupProgress =
         AnimationController(
-            vsync: this,
-            duration: kDockMenuOpenDuration,
-            reverseDuration: kDockMenuCloseDuration,
-          )
-          ..addStatusListener((status) {
-            if (status == AnimationStatus.dismissed) {
-              _popupClosing = false;
-              if (_popupVisible) {
-                _popupVisible = false;
-                _portalController.hide();
-                widget.coordinator?.release(this);
-              }
-              // popup 完全收起 → 恢复 30s 轮换（popup 开着时
-              // [_syncCarouselTimer] 不建表，记 deltas）。dispose 中
-              // status 变回 dismissed 时不做 ref.read。
-              if (mounted) _syncCarouselTimer();
+          vsync: this,
+          duration: kDockMenuOpenDuration,
+          reverseDuration: kDockMenuCloseDuration,
+        )..addStatusListener((status) {
+          if (status == AnimationStatus.dismissed) {
+            _popupClosing = false;
+            if (_popupVisible) {
+              _popupVisible = false;
+              _portalController.hide();
+              widget.coordinator?.release(this);
             }
-          });
+            // popup 完全收起 → 恢复 30s 轮换（popup 开着时
+            // [_syncCarouselTimer] 不建表，记 deltas）。dispose 中
+            // status 变回 dismissed 时不做 ref.read。
+            if (mounted) _syncCarouselTimer();
+          }
+        });
     // KOS `Component.onCompleted: ensureValidPage(showClock)`（:195）——
     // showClock 融合模式恒真（`hasClock` = infoCardOrder 含 clock，
     // DockContainer.qml:52-53），
@@ -359,11 +357,7 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
   ///
   /// 页集 / `autoRotate` / hover 任一变化都无条件重算轮换表——包含
   /// 「1 页 → ≥2 页」的启动方向（KOS `running:` 绑定的等价行为）。
-  void _maybeSyncCarouselTimer(
-    List<int> pages,
-    bool autoRotate,
-    bool hovered,
-  ) {
+  void _maybeSyncCarouselTimer(List<int> pages, bool autoRotate, bool hovered) {
     if (_timerSyncScheduled ||
         (hovered == _timerHovered &&
             autoRotate == _timerAutoRotate &&
@@ -457,9 +451,7 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     } else {
       // ACCEPTANCE popup 条款：150ms OutCubic 入场（scale 0.96→1 + 20px
       // 位移由 DockInfoOverlay 的 progress 驱动）。
-      unawaited(
-        _popupProgress.animateTo(1, curve: Curves.easeOutCubic),
-      );
+      unawaited(_popupProgress.animateTo(1, curve: Curves.easeOutCubic));
     }
   }
 
@@ -699,8 +691,59 @@ class _DockInfoCarouselState extends ConsumerState<DockInfoCarousel>
     final prefs = prefsAsync.value ?? const DockPreferences();
     // KOS hasMusic/hasWeather（:39-40 经 DockContainer hasPlayingMusic/
     // hasWeather 等价式）。
-    final mediaAsync = ref.watch(widget.services.media);
-    final media = mediaAsync.value ?? MprisPlaybackState.unavailable();
+    // `services.media` 全字段投影为值型 record——MPRIS PropertiesChanged
+    // 每次产新 `MprisPlaybackState`（类无 `==`）+ 新 `AsyncData` 包装，直接
+    // watch 会恒重建；select record 等值比较只在 carousel 实际读到的字段
+    // （经 `_cardFor`/`_popupContent` 与 `DockMusicCard.state`）变化时重建，
+    // 其余字段未动的 PropertiesChanged 不再重建本 widget。
+    final mediaRecord = ref.watch(
+      widget.services.media.select((async) {
+        // `.value`（hasValue 感知）保留 AsyncLoading/AsyncError 携带的上一帧——
+        // 与 dock_shell `.value`、media_panel `.value` 等全工程惯用语义一致；
+        // `AsyncData(:final value)` 模式会在 rebuild/refresh 期间丢值闪回 null。
+        final value = async.value;
+        if (value == null) return null;
+        return (
+          value.serviceName,
+          value.identity,
+          value.title,
+          // artists 是 List——以 join 后的 artistLabel 入键（下游只用
+          // artistLabel，列表内容等值即可，引用新实例不算变化）。
+          value.artistLabel,
+          value.album,
+          value.artUrl,
+          value.length,
+          value.position,
+          value.observedAt,
+          value.status,
+          value.canGoNext,
+          value.canGoPrevious,
+          value.canPlay,
+          value.canPause,
+          value.available,
+        );
+      }),
+    );
+    final media = mediaRecord == null
+        ? MprisPlaybackState.unavailable()
+        : MprisPlaybackState(
+            serviceName: mediaRecord.$1,
+            identity: mediaRecord.$2,
+            title: mediaRecord.$3,
+            // artists 已由 artistLabel 派生；DockMusicCard/carousel 均不直接
+            // 读 `artists` 列表（只读 artistLabel）——回传单元素近似即可。
+            artists: mediaRecord.$4.isEmpty ? const [] : [mediaRecord.$4],
+            album: mediaRecord.$5,
+            artUrl: mediaRecord.$6,
+            length: mediaRecord.$7,
+            position: mediaRecord.$8,
+            observedAt: mediaRecord.$9,
+            status: mediaRecord.$10,
+            canGoNext: mediaRecord.$11,
+            canGoPrevious: mediaRecord.$12,
+            canPlay: mediaRecord.$13,
+            canPause: mediaRecord.$14,
+          );
     // music 可用性**与 shell 同源门控**（`dock_shell.dart` 的 `hasAvailableInfo`
     // music 项同一表达式）：order 不含 music 时该项对 hasInfo 无贡献，此处也
     // 不把它算作可用页来源，避免「shell 判 hasInfo=true 而 carousel 认为 music

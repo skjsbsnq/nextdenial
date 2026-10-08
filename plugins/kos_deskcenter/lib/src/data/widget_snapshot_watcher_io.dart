@@ -132,6 +132,10 @@ final class FileWidgetSnapshotWatcher implements WidgetSnapshotWatcher {
   bool _started = false;
   bool _disposed = false;
   int _lastRevision = -1;
+
+  /// 上次成功 stat 到的文件 mtime：30s 兜底轮询用它跳过未变文件的
+  /// readAsString+jsonDecode（防抖路径同样经 `_reload` 更新本缓存）。
+  DateTime? _lastMtime;
   WidgetSnapshotState _state = WidgetSnapshotState.loading;
 
   final StreamController<WidgetSnapshot> _snapshots =
@@ -192,9 +196,19 @@ final class FileWidgetSnapshotWatcher implements WidgetSnapshotWatcher {
 
   Future<void> _reload() async {
     if (_disposed) return;
+    final file = File(_path);
+    // 先 stat：mtime 未变直接返回，不读内容不 decode（周期兜底的大头开销）。
+    try {
+      final modified = (await file.stat()).modified;
+      if (_lastMtime != null && modified == _lastMtime) return;
+      _lastMtime = modified;
+    } on Object {
+      // stat 失败（文件缺失等）：保持现状返回，与读失败同语义。
+      return;
+    }
     String text;
     try {
-      text = await File(_path).readAsString();
+      text = await file.readAsString();
     } on Object {
       return; // 文件缺失/读失败：保持现状，宽限期计时照常走。
     }
